@@ -65,13 +65,16 @@ pub struct SubDevice {
     pub(crate) name: heapless::String<64>,
 
     // pub(crate) flags: SupportFlags,
+    // 端口顺序为 0 -> 3 -> 1 -> 2
     pub(crate) ports: Ports,
 
     pub(crate) dc_support: DcSupport,
 
     /// Distributed Clock latch receive time.
+    // ECAT 处理单元接收到的帧开始时的本地时间（前导码的第一位）
     pub(crate) dc_receive_time: u64,
 
+    // 从站序号
     /// The index of the SubDevice in the EtherCAT tree.
     pub(crate) index: u16,
 
@@ -86,6 +89,7 @@ pub struct SubDevice {
     /// network.
     pub(crate) propagation_delay: u32,
 
+    // 邮箱服务 1-7 循环计数器。只针对单个从站？
     /// The 1-7 cyclic counter used when working with mailbox requests.
     pub(crate) mailbox_counter: AtomicU8,
 
@@ -143,12 +147,14 @@ impl SubDevice {
     ///
     /// This method reads the SubDevices's name and other identifying information, but does not
     /// configure it.
+    // 确认从站在init状态；从EEPROM读取从站名称和标识信息；从寄存器读取ESC支持功能，地址别名，端口，创建从站
     pub(crate) async fn new<'sto>(
         maindevice: &'sto MainDevice<'sto>,
         index: u16,
         configured_address: u16,
     ) -> Result<Self, Error> {
         let subdevice_ref = SubDeviceRef::new(maindevice, configured_address, ());
+        // 状态数据S是泛型参数，这里实例化为()
 
         fmt::debug!(
             "Waiting for SubDevice {:#06x} to enter {}",
@@ -156,19 +162,26 @@ impl SubDevice {
             SubDeviceState::Init
         );
 
+        // 持续FPRD 0x0130，确认从站进入init状态
         subdevice_ref.wait_for_state(SubDeviceState::Init).await?;
 
+        // 设置EEPROM控制权在主站
         // Make sure master has access to SubDevice EEPROM
         subdevice_ref.set_eeprom_mode(SiiOwner::Master).await?;
 
+        // 创建从站EEPROM变量，包含操作EEPROM的DeviceEeprom类型。DeviceEeprom类型实现了EepromDataProvider trait
         let eeprom = subdevice_ref.eeprom();
 
+        // 从EEPROM读取0x0008地址的标识信息
         let identity = eeprom.identity().await?;
 
+        // 从EEPROM读取从站名称
+        // device_name调用时，怎么推断N=64？后文name作为new函数的返回值可以推断出来
         let name = eeprom.device_name().await?.unwrap_or_else(|| {
             let mut s = heapless::String::new();
 
             fmt::unwrap!(
+                // write! 宏用于把格式化后的字符串写入实现了 core::fmt::Write trait 的对象中
                 write!(
                     s,
                     "manu. {:#010x}, device {:#010x}, serial {:#010x}",
@@ -180,6 +193,7 @@ impl SubDevice {
             s
         });
 
+        // FPRD 0x0008 ESC支持功能
         let flags = subdevice_ref
             .read(RegisterAddress::SupportFlags)
             .receive::<SupportFlags>(maindevice)
@@ -187,11 +201,13 @@ impl SubDevice {
 
         fmt::debug!("--> Support flags {:?}", flags);
 
+        // FPRD 0x0012 地址别名
         let alias_address = subdevice_ref
             .read(RegisterAddress::ConfiguredStationAlias)
             .receive::<u16>(maindevice)
             .await?;
 
+        // FPRD 0x0110 端口
         let ports = subdevice_ref
             .read(RegisterAddress::DlStatus)
             .receive::<DlStatus>(maindevice)
@@ -226,11 +242,12 @@ impl SubDevice {
             propagation_delay: 0,
             dc_receive_time: 0,
             identity,
-            name,
+            name, // 这里可以推断出来name的类型为，heapless::String<64>，所以N为64
             dc_support: flags.dc_support(),
             ports,
             dc_sync: DcSync::Disabled,
             // 0 is a reserved value, so we initialise the cycle at 1. The cycle repeats 1 - 7.
+            // 邮箱头的计数器字段，取值范围1-7，用于计算重复检测的顺序编号
             mailbox_counter: AtomicU8::new(1),
         })
     }
@@ -242,6 +259,7 @@ impl SubDevice {
         self.name.as_str()
     }
 
+    // 返回从站的长名称
     /// Get the long name of the SubDevice.
     ///
     /// Using the EK1100 as an example, [`SubDevice::name`](fn@crate::SubDevice::name) will return
@@ -402,6 +420,8 @@ impl SubDevice {
         &self.config.io
     }
 
+    // 检查当前子设备是否为“父设备”的子设备
+    // TODO: 判断方法还需要考证
     /// Check if the current SubDevice is a child of `parent`.
     ///
     /// A SubDevice is a child of a parent if it is connected to an intermediate port of the
@@ -415,11 +435,15 @@ impl SubDevice {
     pub(crate) fn is_child_of(&self, parent: &SubDevice) -> bool {
         // Only forks or crosses in the network can have child devices. Passthroughs only have
         // downstream devices.
+        // 作者将与直线型Passthroughs从站链接的从站定义为下游从站。分叉forks从站和交叉crosses从站才有子从站
+        // 从端口的角度看，分叉forks从站和交叉crosses从站增加的端口不一定是中间的端口
         let parent_is_fork = parent.ports.topology().is_junction();
 
         let parent_port = parent.ports.port_assigned_to(self);
 
         // Children in a fork must be connected to intermediate ports
+        // fork从站（forks和crosses） 中的子节点必须连接到中间端口？这是错误的说法。
+        // 判断当前端口是否为从站的最后一个端口（ESC顺序）
         let child_attached_to_last_parent_port =
             parent_port.is_some_and(|child_port| parent.ports.is_last_port(child_port));
 
@@ -433,11 +457,11 @@ impl SubDevice {
 /// [`SubDeviceGroup`](crate::subdevice_group::SubDeviceGroup) methods to allow the reading and
 /// writing of a SubDevice's process data.
 #[derive(Debug)]
-#[doc(alias = "SlaveRef")]
+#[doc(alias = "SlaveRef")] // 提供文档别名，便于搜索
 pub struct SubDeviceRef<'maindevice, S> {
-    pub(crate) maindevice: &'maindevice MainDevice<'maindevice>,
+    pub(crate) maindevice: &'maindevice MainDevice<'maindevice>, // 对主设备(MainDevice)的不可变引用
     pub(crate) configured_address: u16,
-    state: S,
+    state: S, // 从站设备的状态数据，类型为泛型参数 S，类型由传入的参数自动推断
 }
 
 impl Clone for SubDeviceRef<'_, ()> {
@@ -450,9 +474,13 @@ impl Clone for SubDeviceRef<'_, ()> {
     }
 }
 
+// DerefMut 作用是：
+// 允许类型通过 * 运算符进行可变解引用
+// 必须实现 Deref 特性（不可变解引用）作为基础
+// 返回被引用数据的可变引用
 impl<S> DerefMut for SubDeviceRef<'_, S>
 where
-    S: DerefMut<Target = SubDevice>,
+    S: DerefMut<Target = SubDevice>, // 表示 S 类型必须实现 DerefMut 特性，且该特性的 Target 关联类型必须是 SubDevice
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.state
@@ -480,6 +508,7 @@ where
     }
 }
 
+// 只读访问约束
 impl<S> Deref for SubDeviceRef<'_, S>
 where
     S: Deref<Target = SubDevice>,
@@ -523,6 +552,7 @@ where
         self.state.dc_sync
     }
 
+    // 产生邮箱计数
     /// Return the current cyclic mailbox counter value, from 0-7.
     ///
     /// Calling this method internally increments the counter, so subequent calls will produce a new
@@ -535,8 +565,10 @@ where
         ))
     }
 
+    // 获取从站邮箱当前状态：是否可以接收或发送数据。如果可以，进行数据交互;如果等待超时,返回错误
     /// Get CoE read/write mailboxes.
     async fn coe_mailboxes(&self) -> Result<(Mailbox, Mailbox), Error> {
+        // 获取 EEPROM 里的邮箱Coe配置
         let write_mailbox = self
             .state
             .config
@@ -550,6 +582,7 @@ where
             .read
             .ok_or(Error::Mailbox(MailboxError::NoWriteMailbox))?;
 
+        // 获取邮箱对应的SM的状态寄存器地址
         let mailbox_read_sm_status =
             RegisterAddress::sync_manager_status(read_mailbox.sync_manager);
         let mailbox_write_sm_status =
@@ -557,7 +590,9 @@ where
 
         // Ensure SubDevice OUT (master IN) mailbox is empty. We'll retry this multiple times in
         // case the SubDevice is still busy or bugged or something.
+        // 查询是否有OUT邮箱数据
         for i in 0..10 {
+            // 读取邮箱对应的SM的状态寄存器
             let sm_status = self
                 .read(mailbox_read_sm_status)
                 .receive::<crate::sync_manager_channel::Status>(self.maindevice)
@@ -571,6 +606,7 @@ where
                     sm_status
                 );
 
+                // 从站的邮箱数据准备完成，读取OUT邮箱数据，清空邮箱
                 self.read(read_mailbox.address)
                     .ignore_wkc()
                     .receive_slice(self.maindevice, read_mailbox.len)
@@ -592,11 +628,14 @@ where
         // Wait for SubDevice IN mailbox to be available to receive data from master
         async {
             loop {
+                // 等待从站的IN邮箱准备好，准备接收数据
                 let sm_status = self
                     .read(mailbox_write_sm_status)
                     .receive::<crate::sync_manager_channel::Status>(self.maindevice)
                     .await?;
 
+                // 如果IN邮箱为空，说明从站准备好接收数据，跳出循环
+                // 如果在超时时间内未准备好,返回错误
                 if !sm_status.mailbox_full {
                     break Ok(());
                 }
@@ -617,10 +656,13 @@ where
         Ok((read_mailbox, write_mailbox))
     }
 
+    // 等待从站的OUT邮箱准备好，读取邮箱响应
     /// Wait for a mailbox response
     async fn coe_response(&self, read_mailbox: &Mailbox) -> Result<ReceivedPdu, Error> {
+        // 应该直接保存到一个变量，避免重复查询。这个函数会经常使用
         let mailbox_read_sm = RegisterAddress::sync_manager_status(read_mailbox.sync_manager);
 
+        // 等待从站的OUT邮箱准备好
         // Wait for SubDevice OUT mailbox to be ready
         async {
             loop {
@@ -646,6 +688,7 @@ where
             );
         })?;
 
+        // 读取邮箱响应
         // Read acknowledgement from SubDevice OUT mailbox
         let response = self
             .read(read_mailbox.address)
@@ -657,6 +700,7 @@ where
         Ok(response)
     }
 
+    // 发送CoE服务请求，等待，直到读取响应
     /// Send a mailbox request, wait for response mailbox to be ready, read response from mailbox
     /// and return as a slice.
     async fn send_coe_service<R>(
@@ -666,18 +710,22 @@ where
     where
         R: CoeServiceRequest + Debug,
     {
+        // 获取从站邮箱当前状态：是否可以接收或发送数据。如果可以，进行数据交互;如果等待超时,返回错误
         let (read_mailbox, write_mailbox) = self.coe_mailboxes().await.inspect_err(|err| {
             fmt::error!("{} {} {}", self.configured_address(), self.name(), err)
         })?;
 
+        // 发送CoE请求到从站的IN邮箱
         // Send data to SubDevice IN mailbox
         self.write(write_mailbox.address)
             .with_len(write_mailbox.len)
             .send(self.maindevice, &request.pack().as_ref())
             .await?;
 
+        // 等待从站的OUT邮箱准备好，读取邮箱响应
         let mut response = self.coe_response(&read_mailbox).await?;
 
+        // TODO 这个结构体不准确
         /// A super generalised version of the various header shapes for responses, extracting only
         /// what we need in this method.
         #[derive(Clone, Copy, Debug, PartialEq, Eq, ethercrab_wire::EtherCrabWireRead)]
@@ -699,10 +747,17 @@ where
             sub_index: u8,
         }
 
+        // 反序列化邮箱响应头
         let headers = HeadersRaw::unpack_from_slice(&response)?;
 
+        // 开发时错误捕获：在调试模式下，如果从站返回紧急响应，程序会立即崩溃并提供调试信息
+        // 后面的 if headers.header.service == CoeService::Emergency 条件判断提供了第二道防线
+        // 这种设计确保无论是调试模式（断言有效）还是发布模式（断言被禁用），都能处理紧急情况
         assert_ne!(headers.header.service, CoeService::Emergency);
 
+        // TODO 检查响应是否为CoE服务请求
+
+        // 紧急事件
         if headers.header.service == CoeService::Emergency {
             #[derive(Debug, Copy, Clone, ethercrab_wire::EtherCrabWireRead)]
             #[wire(bytes = 8)]
@@ -717,6 +772,7 @@ where
 
             response.trim_front(HeadersRaw::PACKED_LEN);
 
+            // 再次反序列化邮箱响应数据，提取紧急事件信息
             let decoded = EmergencyData::unpack_from_slice(&response)?;
 
             #[cfg(not(feature = "defmt"))]
@@ -734,13 +790,17 @@ where
                 decoded.extra_data
             );
 
+            // 返回错误
             Err(Error::Mailbox(MailboxError::Emergency {
                 error_code: decoded.error_code,
                 error_register: decoded.error_register,
             }))
+            // 中止传输
         } else if headers.command == CoeCommand::Abort {
             // ETG 1000.6 §5.6.2.7.1 Table 40
+            // 跳过数据报的邮箱头
             response.trim_front(HeadersRaw::PACKED_LEN);
+            // 反序列化出中止码
             let code = CoeAbortCode::unpack_from_slice(&response)?;
 
             fmt::error!(
@@ -843,6 +903,7 @@ where
     /// Write a value to the given SDO index (address) and sub-index.
     ///
     /// Note that this method currently only supports expedited SDO downloads (4 bytes maximum).
+    // 快速SDO下载：只能传输1-4字节的数据
     pub async fn sdo_write<T>(
         &self,
         index: u16,
@@ -867,6 +928,7 @@ where
 
         value.pack_to_slice(&mut buf)?;
 
+        // SDO快速下载请求生成
         let request =
             coe::services::download(counter, index, sub_index, buf, value.packed_len() as u8);
 
@@ -919,6 +981,7 @@ where
     /// # Ok::<(), ethercrab::error::Error>(())
     /// # };
     /// ```
+    // 不是完全访问，自动多次写入SDO的语法糖，相当于调用多次sdo_write
     pub async fn sdo_write_array<T>(&self, index: u16, values: impl AsRef<[T]>) -> Result<(), Error>
     where
         T: EtherCrabWireWrite,
@@ -996,6 +1059,7 @@ where
         Ok(values)
     }
 
+    // SDO快速传输上传：只能传输1-4字节的数据
     pub(crate) async fn sdo_read_expedited<T>(
         &self,
         index: u16,
@@ -1012,10 +1076,12 @@ where
 
         let sub_index = sub_index.into();
 
+        // SDO快速上传请求生成
         let request = coe::services::upload(self.mailbox_counter(), index, sub_index);
 
         fmt::trace!("CoE upload {:#06x} {:?}", index, sub_index);
 
+        // 发送SDO请求，阻塞后获取响应
         let (headers, response) = self.send_coe_service(request).await?;
         let data: &[u8] = &response;
 
@@ -1032,6 +1098,8 @@ where
         }
     }
 
+    // 没有限制返回值长度，可完全访问
+    // 支持快速上传、正常上传、分段上传（在这个函数内完成，会因为异步而阻塞）
     /// Read a value from an SDO (Service Data Object) from the given index (address) and sub-index.
     pub async fn sdo_read<T>(&self, index: u16, sub_index: impl Into<SubIndex>) -> Result<T, Error>
     where
@@ -1042,6 +1110,7 @@ where
         let mut storage = T::buffer();
         let buf = storage.as_mut();
 
+        // SDO快速上传/完全访问请求生成
         let request = coe::services::upload(self.mailbox_counter(), index, sub_index);
 
         fmt::trace!("CoE upload {:#06x} {:?}", index, sub_index);
@@ -1051,18 +1120,23 @@ where
 
         // Expedited transfers where the data is 4 bytes or less long, denoted in the SDO header
         // size value.
+        // SDO头的快速传输标志位为true就是快速上传，继续判断数据长度是否错误
         let response_payload = if headers.sdo_header.expedited_transfer {
             let data_len = 4usize.saturating_sub(usize::from(headers.sdo_header.size));
 
             data.get(0..data_len).ok_or(Error::Internal)?
         }
         // Data is either a normal upload or a segmented upload
+        // 正常上传或分段上传
         else {
             let data_length = headers.header.length.saturating_sub(0x0a);
 
+            // 解析出完整数据长度
             let complete_size = u32::unpack_from_slice(data)?;
+            // 解析出有效数据字节切片
             let data = data.get(u32::PACKED_LEN..).ok_or(Error::Internal)?;
 
+            // 如果程序提供的缓冲区长度不足以放下完整的邮箱数据，返回错误
             // The provided buffer isn't long enough to contain all mailbox data.
             if complete_size > buf.len() as u32 {
                 return Err(Error::Mailbox(MailboxError::TooLong {
@@ -1071,6 +1145,7 @@ where
                 }));
             }
 
+            // 如果是正常上传，则响应有效负载会在初始邮箱读取中返回。
             // If it's a normal upload, the response payload is returned in the initial mailbox read
             if complete_size <= u32::from(data_length) {
                 data.get(0..usize::from(data_length))
@@ -1078,30 +1153,37 @@ where
             }
             // If it's a segmented upload, we must make subsequent requests to load all segment data
             // from the read mailbox.
+            // 如果是分段上传，我们必须发出后续请求，从读邮箱加载所有分段数据。
             else {
                 let mut toggle = false;
                 let mut total_len = 0usize;
 
                 loop {
+                    // SDO分段上传请求生成
                     let request = coe::services::upload_segmented(self.mailbox_counter(), toggle);
 
                     fmt::trace!("CoE upload segmented");
 
+                    // 从网络中读取分段数据
                     let (headers, data) = self.send_coe_service(request).await?;
 
                     // The spec defines the data length as n-3, so we'll just go with that magic
                     // number...
+                    // 规范将数据长度定义为 n-3。n为邮箱头中长度字段的值。
                     let mut chunk_len = usize::from(headers.header.length - 3);
 
                     // Special case as per spec: Minimum response size is 7 bytes. For smaller
                     // responses, we must remove the number of unused bytes at the end of the
                     // response. Extremely weird.
+                    // 根据规范，特殊情况是：最小响应大小为 7 字节。对于较小的响应，我们必须移除响应末尾未使用的字节数。非常奇怪。
                     if chunk_len == 7 {
                         chunk_len -= usize::from(headers.sdo_header.segment_data_size);
                     }
 
+                    // 从数据中提取有效数据字节切片
                     let data = data.get(0..chunk_len).ok_or(Error::Internal)?;
 
+                    // 将有效数据字节切片复制到接口的返回缓冲区中
                     buf.get_mut(total_len..(total_len + chunk_len))
                         .ok_or(Error::Internal)?
                         .copy_from_slice(data);
@@ -1187,7 +1269,8 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
     pub(crate) fn new(
         maindevice: &'maindevice MainDevice<'maindevice>,
         configured_address: u16,
-        state: S,
+        state: S, // S 的类型由传入的 state 参数自动推断
+                  // 可能类型为 SubDevice，()
     ) -> Self {
         Self {
             maindevice,
@@ -1196,13 +1279,15 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
         }
     }
 
+    // 读取从站状态
     /// Get the sub device status.
     pub(crate) async fn state(&self) -> Result<SubDeviceState, Error> {
-        match self
+        match self // FPRD 0x0130
             .read(RegisterAddress::AlStatus)
             .receive::<AlControl>(self.maindevice)
             .await
             .and_then(|ctl| {
+                //检查是否有故障
                 if ctl.error {
                     Err(Error::SubDevice(AlStatusCode::Unknown(0)))
                 } else {
@@ -1211,6 +1296,7 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
             }) {
             Ok(state) => Ok(state),
             Err(e) => match e {
+                //如果有故障，读取故障码
                 Error::SubDevice(AlStatusCode::Unknown(0)) => {
                     let code = self
                         .read(RegisterAddress::AlStatusCode)
@@ -1225,6 +1311,8 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
         }
     }
 
+    // 获取从站状态和故障码。
+    // TODO 这个实现不好，只需要读取一次即可
     /// Get the EtherCAT state machine state of the sub device.
     pub async fn status(&self) -> Result<(SubDeviceState, AlStatusCode), Error> {
         let code = self
@@ -1234,10 +1322,13 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
         futures_lite::future::try_zip(self.state(), code).await
     }
 
+    // 创建从站EEPROM变量，包含操作EEPROM的DeviceEeprom类型
     fn eeprom(&self) -> SubDeviceEeprom<DeviceEeprom> {
+        // DeviceEeprom类型实现了EepromDataProvider trait
         SubDeviceEeprom::new(DeviceEeprom::new(self.maindevice, self.configured_address))
     }
 
+    // 读取从站寄存器接口，限制2字节
     /// Read a register.
     ///
     /// Note that while this method is marked safe, raw alterations to SubDevice config or behaviour can
@@ -1262,9 +1353,11 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
             .await
     }
 
+    // 持续FPRD 0x0130，确认从站进入某个状态，直到超时或已经到正确的状态
     pub(crate) async fn wait_for_state(&self, desired_state: SubDeviceState) -> Result<(), Error> {
         async {
             loop {
+                // FPRD 0x0130得到状态
                 let status = self
                     .read(RegisterAddress::AlStatus)
                     .ignore_wkc()
@@ -1275,13 +1368,15 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
                     break Ok(());
                 }
 
+                // 延迟
                 self.maindevice.timeouts.loop_tick().await;
             }
         }
+        //
         .timeout(self.maindevice.timeouts.state_transition())
         .await
     }
-
+    // FPWR
     pub(crate) fn write(&self, register: impl Into<u16>) -> WrappedWrite {
         Command::fpwr(self.configured_address, register.into())
     }
@@ -1290,6 +1385,7 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
         Command::fprd(self.configured_address, register.into())
     }
 
+    // 请求从站状态切换，如果有故障读取故障码并打印
     pub(crate) async fn request_subdevice_state_nowait(
         &self,
         desired_state: SubDeviceState,
@@ -1301,11 +1397,13 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
         );
 
         // Send state request
+        // FPWR 0x0120 请求状态切换
         let response = self
             .write(RegisterAddress::AlControl)
             .send_receive::<AlControl>(self.maindevice, AlControl::new(desired_state))
             .await?;
 
+        // 检查返回的0x120是否存在故障，如果有则读取故障码 FPRD 0x0134
         if response.error {
             let error = self
                 .read(RegisterAddress::AlStatusCode)
@@ -1325,6 +1423,7 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
         Ok(())
     }
 
+    // 请求从站状态切换，等待直到状态切换完成
     pub(crate) async fn request_subdevice_state(
         &self,
         desired_state: SubDeviceState,
@@ -1334,13 +1433,17 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
         self.wait_for_state(desired_state).await
     }
 
+    // 设置EEPROM PDI模式
     pub(crate) async fn set_eeprom_mode(&self, mode: SiiOwner) -> Result<(), Error> {
         // ETG1000.4 Table 48 – SubDevice information interface access
         // A value of 2 sets owner to Master (not PDI) and cancels access
+        // FPWR 0x0500 数据2
+        // Reset Bit 0x0501[0] to 0: PDI releases EEPROM access
         self.write(RegisterAddress::SiiConfig)
             .send(self.maindevice, 2u16)
             .await?;
 
+        // FPWR 0x0500 数据mode，0为主站，1为PDI
         self.write(RegisterAddress::SiiConfig)
             .send(self.maindevice, mode)
             .await?;

@@ -46,17 +46,21 @@ impl Debug for SubDeviceIdentity {
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct SubDeviceConfig {
-    pub io: IoRanges,
-    pub mailbox: MailboxConfig,
+    pub io: IoRanges,           // 从站保存PDO范围的结构体
+    pub mailbox: MailboxConfig, // 邮箱配置
 }
 
+// 在int到pre op状态切换期间，通过EEPROM的设置来产生配置
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct MailboxConfig {
-    pub(in crate::subdevice) read: Option<Mailbox>,
-    pub(in crate::subdevice) write: Option<Mailbox>,
+    pub(in crate::subdevice) read: Option<Mailbox>, //来自EEPROM，可能没有邮箱
+    pub(in crate::subdevice) write: Option<Mailbox>, //来自EEPROM，可能没有邮箱
+    // EEPROM中支持的邮箱协议
     pub(in crate::subdevice) supported_protocols: MailboxProtocols,
+    // 来自EEPROM，不是和前文重复了吗
     pub(in crate::subdevice) has_coe: bool,
     /// True if Complete Access is supported.
+    // 来自EEPROM，SDO完全访问
     pub(in crate::subdevice) complete_access: bool,
 }
 
@@ -64,9 +68,10 @@ pub struct MailboxConfig {
 pub struct Mailbox {
     pub(in crate::subdevice) address: u16,
     pub(in crate::subdevice) len: u16,
-    pub(in crate::subdevice) sync_manager: u8,
+    pub(in crate::subdevice) sync_manager: u8, // 邮箱对应的SM号
 }
 
+// 从站保存PDO范围的结构体
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct IoRanges {
     pub input: PdiSegment,

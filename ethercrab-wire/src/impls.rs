@@ -118,7 +118,7 @@ macro_rules! impl_tuples {
         )+
     }
 }
-
+// 调用了 impl_tuples! 宏，其主要目的是为不同长度的元组类型（从 1 个元素到 16 个元素）实现 EtherCrabWireRead 和 EtherCrabWireWrite 这两个 trait。
 impl_tuples! {
     1  => (0 T0)
     2  => (0 T0 1 T1)

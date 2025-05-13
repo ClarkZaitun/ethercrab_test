@@ -25,27 +25,38 @@ impl<P> SubDeviceEeprom<P>
 where
     P: EepromDataProvider,
 {
+    // 传入的 provider 类型实现了EepromDataProvider trait
     pub(crate) fn new(provider: P) -> Self {
         Self { provider }
     }
 
+    // 创建EEPROM 提供者的抽象，仅允许读取或写入特定范围字节
+    // EEPROM前128字节固定位置，可以直接给定区间。128字节后面的类别需要通过类型来查找
     /// Start a reader at the given address in words, returning at most `len` bytes.
     pub(crate) fn start_at(&self, word_addr: u16, len_bytes: u16) -> EepromRange<P> {
         EepromRange::new(self.provider.clone(), word_addr, len_bytes / 2)
     }
 
+    // 搜索给定category类别，如果找到该类别，返回EepromRange：匹配的category类型的数据区（字地址和长度）
     /// Search for a given category and return a reader over the bytes contained within the category
     /// if it is found.
     async fn category(&self, category: CategoryType) -> Result<Option<EepromRange<P>>, Error> {
         let mut reader = self.provider.clone();
 
+        // 第一个category的字地址 40 word
         let mut word_addr = SII_FIRST_CATEGORY_START;
 
+        // 空 category 的数量
         let mut num_empty_categories = 0u8;
 
         loop {
+            // 从EEPROM中读取4或8字节数据，此处获得2+2（header+size）字节数据就足够了
             let chunk = reader.read_chunk(word_addr).await?;
 
+            // 加2字,如果溢出返回None，退出循环
+            // 为什么加2？因为要跳过header+size占据的2字（4字节）的区域
+            // EEPROM的category字地址范围为多少？0x40~uint16的最大值
+            // ETG 2010规定地址的类型为16bit
             let Some(incr) = word_addr.checked_add(2) else {
                 fmt::warn!(
                     "Could not find EEPROM category {:?} or end marker. EEPROM could be empty or corrupt.",
@@ -55,13 +66,20 @@ where
                 break Ok(None);
             };
 
+            // 当前字地址指向数据区
             word_addr = incr;
 
+            // 从chunk中分离出前2字节成为c1
             let (c1, chunk) = fmt::unwrap_opt!(chunk.split_first_chunk::<2>());
+            // 从chunk剩余的2字节中分离出前2字节成为c2
             let (c2, _chunk) = fmt::unwrap_opt!(chunk.split_first_chunk::<2>());
 
+            // 获得category header，也就是category类型，Unsigned16
             let category_type = CategoryType::from(u16::from_le_bytes(*c1));
+            // 获得category的长度，单位为字，Unsigned16
             let len_words = u16::from_le_bytes(*c2);
+            // from_le_bytes 作用是把一个长度为 2 的小端字节序字节数组转换为 u16 类型的整数。
+            // 小端字节序指的是数据的低字节存于内存低地址，高字节存于内存高地址
 
             if len_words == 0 {
                 num_empty_categories += 1;
@@ -69,6 +87,7 @@ where
 
             // Heuristic: if every category we search for is empty, it's likely that the EEPROM is
             // blank and we should stop searching for anything.
+            // 32这个数字没有来源，随便定的
             if num_empty_categories >= 32 {
                 fmt::trace!(
                     "Did not find any non-empty categories. EEPROM could be empty or corrupt."
@@ -85,8 +104,12 @@ where
                 len_words
             );
 
+            // 判断当前找到的 EEPROM 类别是否为目标类别或者结束标记，从而决定是否终止循环并返回结果
             match category_type {
+                // cat 是在 match 表达式中使用带守卫（guard）的模式匹配时引入的变量。
+                // 在 Rust 的 match 表达式里，模式匹配可以附带一个条件判断，也就是守卫。这里的 cat 绑定了 category_type 的值，之后通过 if cat == category 这个条件来判断当前绑定的值是否等于目标类别 category。
                 cat if cat == category => {
+                    // 返回EepromRange：匹配的category类型的数据区（字地址和长度）
                     break Ok(Some(EepromRange::new(
                         self.provider.clone(),
                         word_addr,
@@ -97,6 +120,7 @@ where
                 _ => (),
             }
 
+            // 当前字地址跳过数据区，就到下一个category
             // Next category starts after the current category's data. This is a WORD address.
             word_addr += len_words;
         }
@@ -163,9 +187,13 @@ where
     /// Get the device name.
     ///
     /// This is the `OrderIdx` field as described in ETG2010 Table 7.
+    // 从EEPROM读取设备名称
+    // N是多大？
+    // 为什么设备名称是通过order_string_idx查找？
     pub(crate) async fn device_name<const N: usize>(
         &self,
     ) -> Result<Option<heapless::String<N>>, Error> {
+        // 从 EEPROM 中读取 General 类别信息，忽略 NoCategory 错误，若出现此错误则按无信息处理
         let Some(general) = self.general().await.ignore_no_category()? else {
             return Ok(None);
         };
@@ -176,9 +204,12 @@ where
         );
 
         Ok(self
+            // 在String区中查找指定索引的string.
             .find_string(general.order_string_idx)
             .await
+            // 将 Result<T, Error> 类型中可能出现的 Error::Eeprom(EepromError::NoCategory) 错误转换为 Ok(None)
             .ignore_no_category()?
+            // 获取Option内部some的值
             .flatten())
     }
 
@@ -210,9 +241,11 @@ where
         self.find_string(general.name_string_idx).await
     }
 
+    // 读取EEPROM中的标准邮箱区域
     pub(crate) async fn mailbox_config(&self) -> Result<DefaultMailbox, Error> {
         // Start reading standard mailbox config. Raw start address defined in ETG2010 Table 2.
         // Mailbox config is 10 bytes long.
+        // EEPROM标准邮箱区域，0x0018字开始，10字节
         let mut reader = self.start_at(0x0018, DefaultMailbox::PACKED_LEN as u16);
 
         fmt::trace!("Get mailbox config");
@@ -224,39 +257,61 @@ where
         Ok(DefaultMailbox::unpack_from_slice(&buf)?)
     }
 
+    // 读取general Category
     pub(crate) async fn general(&self) -> Result<SiiGeneral, Error> {
+        // 获取general Category的EEPROM范围
         let mut reader = self
+            // 搜索给定category类别，如果找到该类别，返回EepromRange：匹配的category类型的数据区（字地址和长度）
             .category(CategoryType::General)
             .await?
             .ok_or(Error::Eeprom(EepromError::NoCategory))?;
 
+        // 获取字节切片，长度为general Category的长度
         let mut buf = SiiGeneral::buffer();
 
+        // 从EEPROM读取general Category
         reader.read_exact(&mut buf).await?;
 
+        // 反序列化
         Ok(SiiGeneral::unpack_from_slice(&buf)?)
     }
 
+    // 从EEPROM读取0x0008地址的标识信息
     pub(crate) async fn identity(&self) -> Result<SubDeviceIdentity, Error> {
-        let mut reader = self.start_at(0x0008, SubDeviceIdentity::PACKED_LEN as u16);
+        // 创建EEPROM 提供者的抽象，仅允许读取或写入特定范围字节
+        let mut reader = self.start_at(0x0008, SubDeviceIdentity::PACKED_LEN as u16); //长度16字节，8字
+        // 这里的0x0008地址应该设置为枚举或者常数，增强可读性
 
         fmt::trace!("Get identity");
 
+        // 返回一个全为 0 的 Buffer 类型数组，长度已经确定
         let mut buf = SubDeviceIdentity::buffer();
 
+        // 从 reader 读取指定数量的字节到提供的缓冲区，读取的字节数由缓冲区长度决定
+        // 这是 Read trait 里的异步方法，read_exact会调用read函数。实现Read trait时，就会实现read函数
         reader.read_exact(&mut buf).await?;
 
+        // 从buf中反序列化出SubDeviceIdentity结构体的值
         Ok(SubDeviceIdentity::unpack_from_slice(&buf)?)
     }
 
+    // 读取EEPROM中的SM区,得到SM数组
     pub(crate) async fn sync_managers(&self) -> Result<heapless::Vec<SyncManager, 8>, Error> {
+        // 创建一个容量为 8 的 heapless::Vec
         let mut sync_managers = heapless::Vec::<_, 8>::new();
 
         fmt::trace!("Get sync managers");
 
+        // 调用 self.items::<SyncManager>(CategoryType::SyncManager) 方法，该方法会在 EEPROM 里搜索 SyncManager 类别
         let mut cat = self.items::<SyncManager>(CategoryType::SyncManager).await?;
+        // 为什么加::？::<SyncManager> 是 turbofish 语法，也被叫做尖括号语法
+        // turbofish 语法的主要作用是显式指定泛型函数或者泛型类型的类型参数。
+        // 在 Rust 里，很多时候编译器能依据上下文自动推断泛型参数的类型，但某些场景下，编译器没办法进行准确推断，或者开发者希望明确指定类型，这时就需要用到 turbofish 语法
 
+        // 不断调用 cat.next().await? 从 CategoryIterator 里获取下一个 SyncManager 实例，若获取成功，尝试将其添加到 sync_managers 向量中
+        // SyncManager类别区间包含n个SM数据，长度就是8n，每次读取8字节
         while let Some(sm) = cat.next().await? {
+            // TODO:这里应该加上SM通道的数量限制
             sync_managers
                 .push(sm)
                 .map_err(|_| Error::Capacity(Item::SyncManager))?;
@@ -267,22 +322,27 @@ where
         Ok(sync_managers)
     }
 
+    // 从EEPROM中读取所有FMMU的值
     pub(crate) async fn fmmus(&self) -> Result<heapless::Vec<FmmuUsage, 16>, Error> {
+        // 返回EepromRange：匹配FMMU category类型的数据区（字地址和长度）
         let category = self.category(CategoryType::Fmmu).await?;
 
         fmt::trace!("Get FMMUs");
 
+        // fmmus保存FmmuUsage 枚举值
         let fmmus = if let Some(mut reader) = category {
             // ETG100.4 6.6.1 states there may be up to 16 FMMUs
             let mut buf = [0u8; 16];
 
             // Read entire category using its discovered length.
+            // 从 EEPROM 读取最多16个FMMU的数据，fmmus 为实际读取的字节数
             let fmmus = reader.read(&mut buf).await?;
 
-            buf.get(0..fmmus)
+            buf.get(0..fmmus) // 截取缓冲区中实际读取的字节部分
                 .ok_or(Error::Internal)?
-                .iter()
+                .iter() // 对截取的字节切片进行迭代
                 .map(|raw| {
+                    // 将每个原始字节尝试转换为 FmmuUsage 枚举值。若转换失败，在启用 std 特性时记录错误信息，然后将错误转换为 Error 类型
                     FmmuUsage::try_from(*raw).map_err(|e| {
                         #[cfg(feature = "std")]
                         fmt::error!("Failed to decode FmmuUsage: {}", e);
@@ -301,11 +361,13 @@ where
         Ok(fmmus)
     }
 
+    // 读取FMMU ex category
     pub(crate) async fn fmmu_mappings(&self) -> Result<heapless::Vec<FmmuEx, 16>, Error> {
         let mut mappings = heapless::Vec::<_, 16>::new();
 
         fmt::trace!("Get FMMU mappings");
 
+        // 搜索FMMU ex category，返回CategoryIterator迭代器
         let mut cat = self.items::<FmmuEx>(CategoryType::FmmuExtended).await?;
 
         while let Some(fmmu) = cat.next().await? {
@@ -319,11 +381,14 @@ where
         Ok(mappings)
     }
 
+    // 读取EEPROM中TxPDO或RxPDO的所有PDO及其Entry
+    // TODO：预设PDO 为64是否合理？
     async fn pdos(&self, direction: PdoType) -> Result<heapless::Vec<Pdo, 64>, Error> {
         let mut pdos = heapless::Vec::new();
 
         fmt::trace!("Get {:?} PDOs", direction);
 
+        // 搜索给定TxPDO或RxPDO category，返回CategoryIterator迭代器
         let mut cat = self.items::<Pdo>(CategoryType::from(direction)).await?;
 
         while let Some(mut pdo) = cat.next().await? {
@@ -351,11 +416,14 @@ where
         Ok(pdos)
     }
 
+    // 读取EEPROM中TxPDO的所有PDO及其Entry
     /// Transmit PDOs (from device's perspective) - inputs
     pub(crate) async fn maindevice_read_pdos(&self) -> Result<heapless::Vec<Pdo, 64>, Error> {
+        // 读取EEPROM中TxPDO的所有PDO及其Entry
         self.pdos(PdoType::Tx).await
     }
 
+    // 读取EEPROM中RxPDO的所有PDO及其Entry
     /// Receive PDOs (from device's perspective) - outputs
     pub(crate) async fn maindevice_write_pdos(&self) -> Result<heapless::Vec<Pdo, 64>, Error> {
         self.pdos(PdoType::Rx).await
@@ -371,37 +439,49 @@ where
     /// different encoding. For example, some versions of the EL2262 use ISO-8859-1, resulting in
     /// non-ASCII _and_ non-UTF-8 strings. In this case, any non-ASCII characters are replaced with
     /// `'?'`by this method.
+    // 在String区中查找指定索引的string.
     pub(crate) async fn find_string<const N: usize>(
         &self,
         search_index: u8,
     ) -> Result<Option<heapless::String<N>>, Error> {
         fmt::trace!("Get string, index {}", search_index);
 
+        // EtherCAT 中的零索引表示空字符串
         // An index of zero in EtherCAT denotes an empty string.
         if search_index == 0 {
             return Ok(None);
         }
 
+        // 将基于 1 的 EtherCAT 字符串索引转换为基于 0 的正常索引。
+        // 字符串索引从 1 开始，字符串索引 0 用于表示分配空字符串或默认字符串。
         // Turn 1-based EtherCAT string indexing into normal 0-based.
         let search_index = search_index - 1;
 
+        // 搜索给定category类别，如果找到该类别，返回EepromRange：匹配的category类型的数据区（字地址和长度）
         if let Some(mut reader) = self.category(CategoryType::Strings).await? {
+            // 读取字符串数量
+            // 从读取器中异步读取一个字节，String区的第一个字节含义为String数量
             let num_strings = reader.read_byte().await?;
 
             fmt::trace!("--> SubDevice has {} strings", num_strings);
 
+            // 检查搜索索引是否越界
             if search_index > num_strings {
-                return Ok(None);
+                return Ok(None); // 要查找的字符串不存在，返回 Ok(None)
             }
 
+            // 通过循环跳过搜索索引之前的所有字符串
             for i in 0..search_index {
+                // 每个String的长度用一个字节保存
                 let string_len = reader.read_byte().await?;
 
                 fmt::trace!("String index {} has len {}", i, string_len);
 
+                // 跳过当前长度
                 reader.skip_ahead_bytes(string_len.into())?;
             }
 
+            // 读取目标字符串长度
             let string_len = usize::from(reader.read_byte().await?);
 
             if string_len > N {
@@ -411,15 +491,18 @@ where
                 });
             }
 
+            // 创建一个容量为 N 的 heapless::Vec 作为缓冲区
             let mut buf = heapless::Vec::<u8, N>::new();
 
             // SAFETY: We MUST ensure that `string_len` is less than `N`
             unsafe { buf.set_len(string_len) }
 
+            //
             reader.read_exact(&mut buf).await?;
 
             fmt::trace!("--> Raw string bytes {:?}", buf);
 
+            // 移除缓冲区中的所有 C 风格空字符（\0）
             // Get rid of any C null terminators
             buf.retain(|char| *char != 0x00);
 
@@ -427,6 +510,7 @@ where
             // non-ASCII characters. For example, the EL2262 contains the character `0xb5` which is
             // 'μ' in ISO-8859-1. We'll convert any characters that aren't ascii into question
             // marks.
+            // 遍历缓冲区中的每个字节，将非 ASCII 字符替换为问号（?）
             buf.iter_mut().for_each(|c| {
                 if !c.is_ascii() {
                     *c = b'?'
@@ -450,6 +534,7 @@ where
         }
     }
 
+    // 搜索给定category类别，返回CategoryIterator迭代器
     pub(crate) async fn items<T>(
         &self,
         category: CategoryType,
@@ -457,6 +542,7 @@ where
     where
         T: EtherCrabWireReadSized,
     {
+        // 搜索给定category类别，如果找到该类别，返回EepromRange：匹配的category类型的数据区（字地址和长度）
         let Some(reader) = self.category(category).await? else {
             return Ok(CategoryIterator::new(EepromRange::new(
                 self.provider.clone(),
@@ -469,9 +555,12 @@ where
     }
 }
 
+// EEPROM 里的特定类别区域迭代器
 pub struct CategoryIterator<P, T> {
-    reader: EepromRange<P>,
-    item: PhantomData<T>,
+    reader: EepromRange<P>, // EEPROM数据范围
+    item: PhantomData<T>, // PhantomData是Rust 标准库中的一个零大小类型（ZST），它不占用任何内存空间
+                          // 这里引入 PhantomData<T> 是因为 CategoryIterator 虽然在逻辑上和 T 类型有关（用于迭代 T 类型的数据项），但结构体本身并没有实际存储 T 类型的值。
+                          // PhantomData<T> 起到标记作用，告诉编译器 CategoryIterator 和 T 类型相关，有助于类型检查和泛型约束
 }
 
 impl<P, T> CategoryIterator<P, T>
@@ -486,16 +575,19 @@ where
         }
     }
 
+    // 从 EEPROM 里的特定类别区域逐个读取 T 类型的项
     pub async fn next(&mut self) -> Result<Option<T>, Error> {
+        // 创建长度为8的buff
         let mut buf = T::buffer();
 
         match self.reader.read_exact(buf.as_mut()).await {
             // Reached end of category
-            Err(ReadExactError::UnexpectedEof) => return Ok(None),
+            Err(ReadExactError::UnexpectedEof) => return Ok(None), // 若遇到 UnexpectedEof 错误，意味着已到达类别区域末尾，此时返回 Ok(None)
             Err(ReadExactError::Other(e)) => return Err(e),
-            Ok(()) => (),
+            Ok(()) => (), // 若读取成功，继续执行后续代码
         }
 
+        // 反序列化：从字节缓冲区解析数据
         Ok(Some(T::unpack_from_slice(buf.as_ref())?))
     }
 

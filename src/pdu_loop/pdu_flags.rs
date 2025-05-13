@@ -1,6 +1,7 @@
 use crate::LEN_MASK;
 use ethercrab_wire::{EtherCrabWireRead, EtherCrabWireSized, WireError};
 
+// EtherCAT数据报头flag字段（2字节）
 /// PDU fields placed after ADP and ADO, e.g. `LEN`, `C` and `NEXT` fields in ETG1000.4 5.4.1.2
 /// Table 14 – Auto increment physical read (APRD).
 #[derive(Default, Copy, Clone, Debug, PartialEq, Eq)]
@@ -18,6 +19,7 @@ pub struct PduFlags {
 }
 
 impl PduFlags {
+    // EtherCAT数据报头flag字段（2字节）
     pub const fn new(data_len: u16, more_follows: bool) -> PduFlags {
         Self {
             length: data_len,
@@ -40,20 +42,23 @@ impl PduFlags {
 }
 
 impl ethercrab_wire::EtherCrabWireWrite for PduFlags {
+    // 将PDU标志位打包到字节缓冲区中，压缩为2字节
     fn pack_to_slice_unchecked<'buf>(&self, buf: &'buf mut [u8]) -> &'buf [u8] {
+        // 大端序？
         let raw = self.length & LEN_MASK
             | ((self.circulated as u16) << 14)
             | ((self.more_follows as u16) << 15);
 
-        let buf = &mut buf[0..self.packed_len()];
+        let buf = &mut buf[0..self.packed_len()]; // 获取缓冲区前2字节的可变引用
 
-        buf.copy_from_slice(&raw.to_le_bytes());
+        // 问题：不需要判断当前主站使用大端还是小端吗？
+        buf.copy_from_slice(&raw.to_le_bytes()); // 将打包后的16位整数转换为小端字节序并复制到缓冲区
 
         buf
     }
 
     fn packed_len(&self) -> usize {
-        <Self as EtherCrabWireSized>::PACKED_LEN
+        <Self as EtherCrabWireSized>::PACKED_LEN //2
     }
 }
 

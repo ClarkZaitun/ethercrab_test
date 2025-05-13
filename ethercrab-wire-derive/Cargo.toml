@@ -12,20 +12,20 @@ resolver = "2"
 keywords = ["ethercat", "ethercrab", "beckhoff", "automation", "fieldbus"]
 rust-version = "1.79"
 
-[lib]
-proc-macro = true
+[lib] #用于配置当前项目作为库的相关设置，这意味着此 crate 是一个库，而非引用别人的库。
+proc-macro = true #表明这个库是一个过程宏库。过程宏可在编译时生成代码，常用于实现自定义的 derive 宏、函数宏和属性宏。
 # Explicitly written here to make cargo-readme happy <https://github.com/webern/cargo-readme/issues/32>
-path = "src/lib.rs"
+path = "src/lib.rs" #指定库的入口文件路径，Rust 编译器会从这个文件开始编译库代码。注释说明添加这行是为了解决 cargo-readme 工具的一个问题（详见相关 GitHub 链接）。
 
 [dependencies]
-criterion = { version = "0.5.1", default-features = false }
+criterion = { version = "0.5.1", default-features = false }#criterion 是用于编写基准测试的库。default-features = false 表示禁用该库的默认特性，让项目能按需引入必要特性。
 proc-macro2 = "1.0.73"
 quote = "1.0.34"
 syn = { version = "2.0.44", features = ["full"] }
 
-[dev-dependencies]
-trybuild = "1.0.86"
-ethercrab-wire = { path = "../ethercrab-wire" }
+[dev-dependencies] #该部分列出了仅在开发阶段使用的依赖项，像测试和基准测试等场景。
+trybuild = "1.0.86" #用于测试过程宏，通过检查示例代码的编译情况来验证宏的功能。
+ethercrab-wire = { path = "../ethercrab-wire" } #一个本地依赖项，指向父目录下的 ethercrab-wire 项目。
 syn = { version = "2.0.44", features = ["full", "extra-traits"] }
 
 [[bench]]

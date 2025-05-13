@@ -211,6 +211,7 @@ pub trait CoeServiceRequest:
     fn validate_response(&self, received_index: u16, received_subindex: u8) -> bool;
 }
 
+// 校验返回的快速SDO响应返回的Index和SubIndex与请求一致
 impl CoeServiceRequest for SdoExpeditedDownload {
     fn validate_response(&self, received_index: u16, received_subindex: u8) -> bool {
         received_index == self.headers.sdo_header.index
@@ -218,12 +219,14 @@ impl CoeServiceRequest for SdoExpeditedDownload {
     }
 }
 
+// 校验返回的快速SDO响应返回的Index和SubIndex与请求一致
 impl CoeServiceRequest for SdoNormal {
     fn validate_response(&self, received_index: u16, received_subindex: u8) -> bool {
         received_index == self.sdo_header.index && received_subindex == self.sdo_header.sub_index
     }
 }
 
+// 分段传输不需要校验Index和SubIndex，直接返回true
 impl CoeServiceRequest for SdoSegmented {
     // No values to check against, so always valid
     fn validate_response(&self, _received_index: u16, _received_subindex: u8) -> bool {
@@ -231,6 +234,7 @@ impl CoeServiceRequest for SdoSegmented {
     }
 }
 
+// SDO快速下载请求生成。（长度已经限制为A字节）
 pub fn download(
     counter: u8,
     index: u16,
@@ -262,6 +266,7 @@ pub fn download(
     }
 }
 
+// SDO分段上传请求生成
 pub fn upload_segmented(counter: u8, toggle: bool) -> SdoSegmented {
     SdoSegmented {
         header: MailboxHeader {
@@ -282,6 +287,7 @@ pub fn upload_segmented(counter: u8, toggle: bool) -> SdoSegmented {
     }
 }
 
+// SDO快速上传、正常上传、完全访问请求生成
 pub fn upload(counter: u8, index: u16, access: SubIndex) -> SdoNormal {
     SdoNormal {
         header: MailboxHeader {

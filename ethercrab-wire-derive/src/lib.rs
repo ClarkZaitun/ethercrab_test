@@ -187,32 +187,42 @@ use syn::{parse_macro_input, Data, DeriveInput};
 /// For write-only items, see [`EtherCrabWireWrite`]. For read-only items, see
 /// [`EtherCrabWireRead`].
 #[proc_macro_derive(EtherCrabWireReadWrite, attributes(wire))]
+// proc_macro_derive定义派生宏EtherCrabWireReadWrite
+// attributes(wire)参数指定了宏在处理过程中可以识别的自定义属性。wire 是自定义属性名，用户能在结构体、枚举、字段或枚举变体上使用 #[wire(...)] 形式的属性，为宏提供额外信息，指导代码生成
 pub fn ether_crab_wire(input: TokenStream) -> TokenStream {
+    // input: TokenStream 输入是编译器传递的待处理代码标记流
+    // 将输入的 TokenStream 解析为 DeriveInput 结构体，该结构体包含了 #[derive] 属性所修饰的类型定义信息，如类型名、数据类型（枚举、结构体等）
     let input = parse_macro_input!(input as DeriveInput);
 
+    // 根据数据类型处理
     let res = match input.clone().data {
+        // 解析枚举定义，返回解析结果
         Data::Enum(e) => parse_enum(e, input.clone()).map(|parsed| {
-            let mut tokens = generate_enum_write(parsed.clone(), &input, false);
+            let mut tokens = generate_enum_write(parsed.clone(), &input, false); // 生成枚举类型的写入代码
 
-            tokens.extend(generate_enum_read(parsed, &input));
+            tokens.extend(generate_enum_read(parsed, &input)); // 生成枚举类型的读取代码
 
             tokens
         }),
+        // 解析结构体定义，返回解析结果
         Data::Struct(s) => parse_struct(s, input.clone()).map(|parsed| {
-            let mut tokens = generate_struct_write(&parsed, &input);
+            let mut tokens = generate_struct_write(&parsed, &input); // 生成结构体类型的写入代码
 
-            tokens.extend(generate_struct_read(&parsed, &input));
+            tokens.extend(generate_struct_read(&parsed, &input)); // 生成结构体类型的读取代码
 
-            tokens.extend(generate_sized_impl(&parsed, &input));
+            tokens.extend(generate_sized_impl(&parsed, &input)); // 生成 EtherCrabWireSized trait 的实现代码
+                                                                 //将生成的写入、读取和 EtherCrabWireSized 实现代码合并到 tokens 中
 
             tokens
         }),
+        // 返回一个编译错误，提示联合体不被支持
         Data::Union(_) => Err(syn::Error::new(
             input.ident.span(),
-            "Unions are not supported",
+            "Unions are not supported", //如果生成代码过程中出现错误（Err 分支），将错误信息转换为编译错误的 TokenStream 并返回，使编译器在编译时输出错误信息
         )),
     };
 
+    // 错误处理
     let res = match res {
         Ok(res) => res,
         Err(e) => return e.to_compile_error().into(),

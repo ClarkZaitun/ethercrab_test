@@ -1,5 +1,6 @@
 use crate::pdu_loop::pdu_flags::PduFlags;
 
+// Datagram Header
 /// A single PDU header, command, index, flags and IRQ.
 #[derive(Debug, Copy, Clone, ethercrab_wire::EtherCrabWireReadWrite)]
 #[wire(bytes = 10)]
@@ -16,7 +17,7 @@ pub struct PduHeader {
     ///
     /// This represents 2x `u16` or 1x `u32` depending on the command.
     #[wire(bytes = 4)]
-    pub command_raw: [u8; 4],
+    pub command_raw: [u8; 4], //address
 
     /// PDU flags.
     #[wire(bytes = 2)]

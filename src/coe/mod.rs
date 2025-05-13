@@ -42,6 +42,7 @@ pub enum CoeCommand {
     UploadSegment = 0x03,
 }
 
+// SDO头
 /// Defined in ETG1000.6 Section 5.6.2.1.1
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ethercrab_wire::EtherCrabWireReadWrite)]
 #[wire(bytes = 4)]
@@ -126,6 +127,7 @@ impl SubIndex {
     pub(crate) fn sub_index(&self) -> u8 {
         match self {
             // 0th sub-index counts number of sub-indices in object, so we'll start from 1
+            // ETG 1020 14.2 完整访问可以从子索引 0 或子索引 1 开始，不允许使用其他子索引
             SubIndex::Complete => 1,
             SubIndex::Index(idx) => *idx,
         }

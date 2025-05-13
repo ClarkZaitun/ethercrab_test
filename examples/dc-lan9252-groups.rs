@@ -173,6 +173,7 @@ fn main() -> Result<(), Error> {
                 let mut max_deviation = 0;
 
                 for s1 in slow_group.iter(&maindevice) {
+                    // 读取 0x92C 时间偏差
                     let diff = match s1
                         .register_read::<u32>(RegisterAddress::DcSystemTimeDifference)
                         .await
@@ -276,6 +277,7 @@ fn main() -> Result<(), Error> {
 
         // SubDevice clocks are aligned. We can turn DC on now.
         let slow_group = slow_group
+            // 完整的DC配置
             .configure_dc_sync(
                 &maindevice,
                 DcConfiguration {

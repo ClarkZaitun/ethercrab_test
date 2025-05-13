@@ -39,15 +39,21 @@ impl<'sto> ReceivedFrame<'sto> {
         f
     }
 
+    // 通过传入的PduResponseHandle，和返回帧进行匹配
+    // 从返回的帧中获取数据报的报头和WKC，没有检查WKC是否正确
     pub fn first_pdu(self, handle: PduResponseHandle) -> Result<ReceivedPdu<'sto>, Error> {
+        // 从返回的帧中获取EtherCAT 数据报的字节切片
         let buf = self.inner.pdu_buf();
 
+        // 解析数据报头
         let pdu_header = PduHeader::unpack_from_slice(buf)?;
 
+        // 获得数据报数据长度
         let payload_len = usize::from(pdu_header.flags.len());
 
         // If buffer isn't long enough to hold payload and WKC, this is probably a corrupt PDU or
         // someone is committing epic haxx.
+        // 这里不是应该 10 + payload_len + 2 ？
         if buf.len() < payload_len + 2 {
             return Err(Error::Pdu(PduError::TooLong));
         }
@@ -60,6 +66,7 @@ impl<'sto> ReceivedFrame<'sto> {
             return Err(Error::Pdu(PduError::InvalidIndex(pdu_header.index)));
         }
 
+        // 安全地获取指向数据报数据的非空指针
         let payload_ptr = unsafe {
             NonNull::new_unchecked(
                 buf.get(PduHeader::PACKED_LEN..)
@@ -69,6 +76,7 @@ impl<'sto> ReceivedFrame<'sto> {
             )
         };
 
+        // 安全地获取指向数据报WKC的非空指针
         let working_counter = u16::unpack_from_slice(
             buf.get((PduHeader::PACKED_LEN + payload_len)..)
                 .ok_or(Error::Internal)?,
@@ -82,14 +90,18 @@ impl<'sto> ReceivedFrame<'sto> {
         })
     }
 
+    // 会获取WKC
     // Might want this in the future
     #[allow(unused)]
     pub fn pdu<'pdu>(&'sto self, handle: PduResponseHandle) -> Result<ReceivedPdu<'pdu>, Error>
     where
         'sto: 'pdu,
     {
+        // 获取EtherCAT 数据报的字节切片
         let mut buf = self.inner.pdu_buf();
 
+        // 通过遍历数据报头，跳过前面的PDU
+        // TODO：每个数据报都重复遍历。应该收到帧后统一分割为数据报
         // Skip over any preceding PDUs
         for _ in 0..handle.index_in_frame {
             let pdu_header = PduHeader::unpack_from_slice(buf)?;
@@ -103,22 +115,26 @@ impl<'sto> ReceivedFrame<'sto> {
         // This checks for buffer min length
         let pdu_header = PduHeader::unpack_from_slice(buf)?;
 
+        // 收发的数据报检查命令是否一致
         if pdu_header.command_code != handle.command_code {
             return Err(Error::Pdu(PduError::Decode));
         }
-
+        // 收发的数据报检查索引是否一致
         if pdu_header.index != handle.pdu_idx {
             return Err(Error::Pdu(PduError::InvalidIndex(pdu_header.index)));
         }
 
         let payload_len = usize::from(pdu_header.flags.len());
 
+        // 收发的数据报检查数据长度是否一致
+        // 不能直接比对数据报头吗？一次性比对完成
         // If buffer isn't long enough to hold payload and WKC, this is probably a corrupt PDU or
         // someone is committing epic haxx.
         if buf.len() < payload_len + 2 {
             return Err(Error::Pdu(PduError::TooLong));
         }
 
+        // 安全地获取指向数据报数据的非空指针
         let payload_ptr = unsafe {
             NonNull::new_unchecked(
                 buf.get(PduHeader::PACKED_LEN..)
@@ -141,6 +157,7 @@ impl<'sto> ReceivedFrame<'sto> {
         })
     }
 
+    // 用于处理一帧多个数据报的情况：转换为数据报迭代器
     pub fn into_pdu_iter(self) -> ReceivedPduIter<'sto> {
         ReceivedPduIter {
             frame: self,
@@ -163,6 +180,7 @@ impl Drop for ReceivedFrame<'_> {
     }
 }
 
+// 用于处理一帧多个数据报的情况
 // NOTE: Takes ownership of frame so we can't do double reads with handles
 pub struct ReceivedPduIter<'sto> {
     frame: ReceivedFrame<'sto>,
@@ -172,6 +190,7 @@ pub struct ReceivedPduIter<'sto> {
 impl<'sto> Iterator for ReceivedPduIter<'sto> {
     type Item = Result<ReceivedPdu<'sto>, Error>;
 
+    // 获取EtherCAT数据区中的下一个数据报，会获取WKC
     fn next(&mut self) -> Option<Self::Item> {
         // Mostly used in tests, but this check will ensure the frame actually has a PDU in it
         if self.frame.inner.pdu_payload_len() == 0 {
@@ -214,6 +233,7 @@ impl<'sto> Iterator for ReceivedPduIter<'sto> {
             _storage: PhantomData,
         });
 
+        // 更新下一个数据报的起始位置
         // Update buffer pos for next iteration if there are more PDUs to come
         if pdu_header.flags.more_follows {
             self.buf_pos += this_pdu_len;
@@ -230,10 +250,10 @@ impl<'sto> Iterator for ReceivedPduIter<'sto> {
 
 #[derive(Debug)]
 pub struct ReceivedPdu<'sto> {
-    data_start: NonNull<u8>,
-    len: usize,
-    pub(crate) working_counter: u16,
-    _storage: PhantomData<&'sto ()>,
+    data_start: NonNull<u8>, // 帧返回时，指向数据报数据的非空指针。trim_front 会更新该指针
+    len: usize,              // 数据报数据长度
+    pub(crate) working_counter: u16, //从返回帧获取的WKC
+    _storage: PhantomData<&'sto ()>, // 明确表示这个结构体依赖于外部数据的生命周期 'sto
 }
 
 impl ReceivedPdu<'_> {
@@ -241,12 +261,14 @@ impl ReceivedPdu<'_> {
         self.len
     }
 
+    // 跳过数据报数据的前ct个字节
     pub fn trim_front(&mut self, ct: usize) {
         let ct = ct.min(self.len());
 
         self.data_start = unsafe { NonNull::new_unchecked(self.data_start.as_ptr().add(ct)) };
     }
 
+    // 验证工作计数器(Working Counter, WKC)的值是否符合预期
     pub fn wkc(self, expected: u16) -> Result<Self, Error> {
         if self.working_counter == expected {
             Ok(self)
@@ -258,6 +280,7 @@ impl ReceivedPdu<'_> {
         }
     }
 
+    // 有WKC预期值时检查WKC是否符合预期，否则直接返回WKC
     pub fn maybe_wkc(self, expected: Option<u16>) -> Result<Self, Error> {
         match expected {
             Some(expected) => self.wkc(expected),
@@ -270,6 +293,7 @@ impl ReceivedPdu<'_> {
 // lifetime.
 unsafe impl Send for ReceivedPdu<'_> {}
 
+// 为何能调用get方法？ ReceivedPdu通过Deref<Target=[u8]> trait实现了自动解引用为字节切片
 impl Deref for ReceivedPdu<'_> {
     type Target = [u8];
 

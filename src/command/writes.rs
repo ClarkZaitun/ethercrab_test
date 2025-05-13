@@ -63,6 +63,7 @@ impl WrappedWrite {
         }
     }
 
+    // 没有给数据长度len_override时，后文CreatedFrame::push_pdu会根据data的数据长度自动生成
     /// Set an explicit length for the PDU instead of taking it from the sent data.
     ///
     /// The length will be the _maximum_ of the value set here and the data sent.
@@ -73,14 +74,17 @@ impl WrappedWrite {
         }
     }
 
+    // 不应该有这个函数
+    // 如果WKC不是预期值，不返回错误
     /// Do not return an error if the working counter is different from the expected value.
     ///
     /// The default value is `1` and can be overridden with [`with_wkc`](WrappedWrite::with_wkc).
     pub fn ignore_wkc(self) -> Self {
-        Self { wkc: None, ..self }
+        Self { wkc: None, ..self } //..self 表示保留原实例的所有其他字段值不变
     }
 
     /// Change the expected working counter from its default of `1`.
+    // 设置预期WKC
     pub fn with_wkc(self, wkc: u16) -> Self {
         Self {
             wkc: Some(wkc),
@@ -88,6 +92,8 @@ impl WrappedWrite {
         }
     }
 
+    // 没有给数据长度len_override，后文CreatedFrame::push_pdu会根据data的数据长度自动生成
+    // 不检查WKC
     /// Send a payload with a length set by [`with_len`](WrappedWrite::with_len), ignoring the
     /// response.
     pub async fn send<'maindevice>(
@@ -100,6 +106,7 @@ impl WrappedWrite {
         Ok(())
     }
 
+    // 可能会检查WKC。有预期值时检查WKC是否符合预期，否则直接返回WKC
     /// Send a value, returning the response returned from the network.
     pub async fn send_receive<'maindevice, T>(
         self,
@@ -115,6 +122,7 @@ impl WrappedWrite {
             .and_then(|data| Ok(T::unpack_from_slice(&data)?))
     }
 
+    // 可能会检查WKC。有预期值时检查WKC是否符合预期，否则直接返回WKC
     /// Similar to [`send_receive`](WrappedWrite::send_receive) but returns a slice.
     pub async fn send_receive_slice<'maindevice>(
         self,

@@ -35,13 +35,18 @@ pub use self::tx_rx_response::TxRxResponse;
 static GROUP_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// The size of a DC sync PDU.
+// 时间同步帧的数据报长度
 const DC_PDU_SIZE: usize = CreatedFrame::PDU_OVERHEAD_BYTES + u64::PACKED_LEN;
 
 // MSRV: Remove when core SyncUnsafeCell is stabilised
+// MySyncUnsafeCell封装标准库中的 UnsafeCell
 #[derive(Debug)]
 pub(crate) struct MySyncUnsafeCell<T: ?Sized>(pub UnsafeCell<T>);
+// ?Sized 是一个 trait bound，它表示 T 可以是不定大小类型（unsized type），像切片 [T]、trait 对象 dyn Trait 这类在编译时大小不确定的类型也能作为 T 的具体类型
+// UnsafeCell<T> 是 Rust 标准库中的类型，它提供了内部可变性，即允许通过共享引用修改其内部数据
 
 impl<T> MySyncUnsafeCell<T> {
+    // 构造函数
     pub fn new(inner: T) -> Self {
         Self(UnsafeCell::new(inner))
     }
@@ -56,7 +61,13 @@ impl<T: ?Sized> MySyncUnsafeCell<T> {
     /// Ensure that the access is unique (no active references, mutable or not)
     /// when casting to `&mut T`, and ensure that there are no mutations
     /// or mutable aliases going on when casting to `&T`
+    // 获取指向封装值的可变指针
+    // 这可以转换为任何类型的指针：
+    // 转换为 `&mut T` 时，确保访问唯一（无活动引用，无论是否可变）。
+    // 转换为 `&T` 时，确保没有发生任何突变或可变别名
     #[inline]
+    // 返回一个指向包装值的可变原始指针 *mut T
+    // 当将该指针转换为 &mut T 时，要确保访问是唯一的（没有其他活跃的引用）；转换为 &T 时，要确保没有突变或可变别名。
     pub const fn get(&self) -> *mut T {
         self.0.get()
     }
@@ -66,10 +77,15 @@ impl<T: ?Sized> MySyncUnsafeCell<T> {
     /// This call borrows the `SyncUnsafeCell` mutably (at compile-time) which
     /// guarantees that we possess the only reference.
     #[inline]
+    // 接收 self 的可变引用，返回一个指向底层数据的可变引用 &mut T
+    // 由于函数参数是 &mut self，Rust 编译器会保证此时只有一个引用，避免数据竞争。
     pub fn get_mut(&mut self) -> &mut T {
         self.0.get_mut()
     }
 }
+
+// 用一系列常量泛型参数来表示 SubDeviceGroup 的EtherCAT状态
+// 每个状态都是一个结构体，没有字段，只是一个标记
 
 /// A typestate for [`SubDeviceGroup`] representing a group that is shut down.
 ///
@@ -96,6 +112,10 @@ pub struct SafeOp;
 #[derive(Copy, Clone, Debug)]
 pub struct Op;
 
+// 表示从站组是否配置了分布式时钟（DC）
+// 如果配置了 DC，那么从站组的状态就会是 HasDc
+// 如果没有配置 DC，那么从站组的状态就会是 NoDc
+
 /// A typestate for [`SubDeviceGroup`]s that do not have a Distributed Clock configuration
 #[derive(Copy, Clone, Debug)]
 pub struct NoDc;
@@ -111,6 +131,7 @@ pub struct HasDc {
     reference: u16,
 }
 
+// 表示从站组是否配置了过程数据映像（PDI）
 /// Marker trait for `SubDeviceGroup` typestates where all SubDevices have a PDI.
 #[doc(hidden)]
 pub trait HasPdi {}
@@ -119,6 +140,7 @@ impl HasPdi for PreOpPdi {}
 impl HasPdi for SafeOp {}
 impl HasPdi for Op {}
 
+// 表示从站组是否在 PRE-OP 状态
 #[doc(hidden)]
 pub trait IsPreOp {}
 
@@ -127,8 +149,8 @@ impl IsPreOp for PreOpPdi {}
 
 #[derive(Default)]
 struct GroupInner<const MAX_SUBDEVICES: usize> {
-    subdevices: heapless::Vec<SubDevice, MAX_SUBDEVICES>,
-    pdi_start: PdiOffset,
+    subdevices: heapless::Vec<SubDevice, MAX_SUBDEVICES>, // 从站数组
+    pdi_start: PdiOffset, // 当前组的 PDI 起始偏移量，也是逻辑地址。逻辑地址从0开始
 }
 
 const CYCLIC_OP_ENABLE: u8 = 0b0000_0001;
@@ -151,6 +173,8 @@ pub struct DcConfiguration {
     pub sync0_shift: Duration,
 }
 
+// 用于在DC模式下，每周期返回发帧时间信息，包括DC系统时间、下一个周期的等待时间、当前周期的偏移时间
+// 方便应用层确认下周期的时间点
 /// Information useful to a process data cycle.
 #[derive(Debug, Copy, Clone)]
 pub struct CycleInfo {
@@ -170,11 +194,13 @@ pub struct CycleInfo {
     pub cycle_start_offset: Duration,
 }
 
+// PDO域？
+// 这个库只允许通过组来访问从站PDO
 /// A group of one or more EtherCAT SubDevices.
 ///
 /// Groups are created during EtherCrab initialisation, and are the only way to access individual
 /// SubDevice PDI sections.
-#[doc(alias = "SlaveGroup")]
+#[doc(alias = "SlaveGroup")] // 为文档添加别名 SlaveGroup，这意味着在文档搜索时，输入 SlaveGroup 也能找到 SubDeviceGroup 的相关信息
 pub struct SubDeviceGroup<
     const MAX_SUBDEVICES: usize,
     const MAX_PDI: usize,
@@ -182,24 +208,38 @@ pub struct SubDeviceGroup<
     S = PreOp,
     DC = NoDc,
 > {
+    // S = PreOp：一个泛型类型参数，默认值为 PreOp；DC = NoDc：一个泛型类型参数，默认值为 NoDc
+
+    // 组ID
+    // 从0开始，每个新增的组ID会加一
     id: GroupId,
+    // 过程数据映像（PDI）数据区：PDI数据区开头部分为从站输入数据；剩余字部分为输出数据
+    // 读写锁。spin::rwlock::RwLock 是一个自旋锁，它允许并发的读操作和独占的写操作
+    // MySyncUnsafeCell<[u8; MAX_PDI]> 是锁保护的数据，MySyncUnsafeCell 是自定义的类型，用于包装 UnsafeCell 并实现 Sync trait
+    // crate::SpinStrategy 是自旋锁的自旋策略
     pdi: RwLock<R, MySyncUnsafeCell<[u8; MAX_PDI]>>,
     /// The number of bytes at the beginning of the PDI reserved for SubDevice inputs.
+    //  PDI 数据区输入数据实际总字节数
     read_pdi_len: usize,
     /// The total length (I and O) of the PDI for this group.
+    // PDI数据区输入输出数据实际总字节数。需要小于等于 MAX_PDI
     pdi_len: usize,
+    // inner 保存了从站数组和PDI数据区的起始地址
     inner: MySyncUnsafeCell<GroupInner<MAX_SUBDEVICES>>,
-    dc_conf: DC,
-    _state: PhantomData<S>,
+    dc_conf: DC,            // 标记类型，具体类型取决于结构体实例化时传入的类型
+    _state: PhantomData<S>, // PhantomData 是一个零大小类型，不占用实际内存空间，仅用于类型标记
 }
 
 impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, DC>
     SubDeviceGroup<MAX_SUBDEVICES, MAX_PDI, R, PreOp, DC>
 {
+    // 配置TxPDO和RxPDO的FMMU，并更新 SubDeviceGroup 中 GroupInner 每个从站的 PDI 偏移
     /// Configure read/write FMMUs and PDI for this group.
     async fn configure_fmmus(&mut self, maindevice: &MainDevice<'_>) -> Result<(), Error> {
         let inner = self.inner.get_mut();
 
+        // 当前组的 PDI 起始偏移量。也就是第一个从站PDO在PDI中的起始地址
+        // 在本函数内会随着遍历从站不断累加
         let mut pdi_position = inner.pdi_start;
 
         fmt::debug!(
@@ -209,17 +249,21 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, DC>
         );
 
         // Configure master read PDI mappings in the first section of the PDI
+        // 在 PDI 的第一部分配置 从站输入 PDI 映射
         for subdevice in inner.subdevices.iter_mut() {
             // We're in PRE-OP at this point
+            // 刷新PDI未分配给从站PDO的地址，得到下一个从站PDO的起始地址
             pdi_position = SubDeviceRef::new(maindevice, subdevice.configured_address(), subdevice)
+                // 读取从站PDO配置后，设置输入FMMU，得到从站PDO在PDI中的地址范围
                 .configure_fmmus(
-                    pdi_position,
-                    inner.pdi_start.start_address,
+                    pdi_position,                  // 当前从站PDO在PDI中的起始地址，也就是逻辑地址
+                    inner.pdi_start.start_address, // 组的PDI起始地址
                     PdoDirection::MasterRead,
                 )
                 .await?;
         }
 
+        // 计算当前组的PDI数据区输入数据实际总字节数
         self.read_pdi_len = (pdi_position.start_address - inner.pdi_start.start_address) as usize;
 
         fmt::debug!("SubDevice mailboxes configured and init hooks called");
@@ -227,6 +271,8 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, DC>
         // We configured all read PDI mappings as a contiguous block in the previous loop. Now we'll
         // configure the write mappings in a separate loop. This means we have IIIIOOOO instead of
         // IOIOIO.
+        // 我们在上一个循环中将所有读取 PDI 映射配置为一个连续块。现在我们将在一个单独的循环中配置写入映射。这意味着我们将使用 IIIIOOOO 而不是 IOIOIO。
+        // 在 PDI 的第二部分配置 从站输出 PDI 映射
         for subdevice in inner.subdevices.iter_mut() {
             let addr = subdevice.configured_address();
 
@@ -234,9 +280,10 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, DC>
 
             // Still in PRE-OP
             pdi_position = subdevice_config
+                // 读取从站PDO配置后，设置输输出FMMU，得到从站PDO在PDI中的地址范围
                 .configure_fmmus(
-                    pdi_position,
-                    inner.pdi_start.start_address,
+                    pdi_position,                  // 当前从站PDO在PDI中的起始地址，也就是逻辑地址
+                    inner.pdi_start.start_address, // 组的PDI起始地址
                     PdoDirection::MasterWrite,
                 )
                 .await?;
@@ -244,6 +291,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, DC>
 
         fmt::debug!("SubDevice FMMUs configured for group. Able to move to SAFE-OP");
 
+        // 计算当前组的PDI数据区实际总字节数
         self.pdi_len = (pdi_position.start_address - inner.pdi_start.start_address) as usize;
 
         fmt::debug!(
@@ -253,6 +301,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, DC>
             self.read_pdi_len
         );
 
+        // 检查PDI长度是否超过最大长度，超过则返回错误
         if self.pdi_len > MAX_PDI {
             return Err(Error::PdiTooLong {
                 max_length: MAX_PDI,
@@ -263,6 +312,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, DC>
         Ok(())
     }
 
+    // 根据从站在组中的索引获取从站引用
     /// Borrow an individual SubDevice.
     #[deny(clippy::panic)]
     #[doc(alias = "slave")]
@@ -283,6 +333,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, DC>
         ))
     }
 
+    // 从pre op切换到op，没有设置SYNC。在此之前需要配置PDO
     /// Transition the group from PRE-OP -> SAFE-OP -> OP.
     ///
     /// To transition individually from PRE-OP to SAFE-OP, then SAFE-OP to OP, see
@@ -291,11 +342,13 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, DC>
         self,
         maindevice: &MainDevice<'_>,
     ) -> Result<SubDeviceGroup<MAX_SUBDEVICES, MAX_PDI, R, Op, DC>, Error> {
+        // 没有设置SYNC
         let self_ = self.into_safe_op(maindevice).await?;
 
         self_.into_op(maindevice).await
     }
 
+    // 配置FMMU，同时会设置PDI
     /// Configure FMMUs, but leave the group in [`PreOp`] state.
     ///
     /// This method is used to obtain access to the group's PDI and related functionality. All SDO
@@ -305,6 +358,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, DC>
         mut self,
         maindevice: &MainDevice<'_>,
     ) -> Result<SubDeviceGroup<MAX_SUBDEVICES, MAX_PDI, R, PreOpPdi, DC>, Error> {
+        // 配置TxPDO和RxPDO的FMMU
         self.configure_fmmus(maindevice).await?;
 
         Ok(SubDeviceGroup {
@@ -318,15 +372,18 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, DC>
         })
     }
 
+    // 没有设置SYNC
     /// Transition the SubDevice group from PRE-OP to SAFE-OP.
     pub async fn into_safe_op(
         self,
         maindevice: &MainDevice<'_>,
     ) -> Result<SubDeviceGroup<MAX_SUBDEVICES, MAX_PDI, R, SafeOp, DC>, Error> {
+        // 设置FMMU
         let self_ = self.into_pre_op_pdi(maindevice).await?;
 
         // We're done configuring FMMUs, etc, now we can request all SubDevices in this group go into
         // SAFE-OP
+        // 请求切换到safe op
         self_
             .transition_to(maindevice, SubDeviceState::SafeOp)
             .await
@@ -340,6 +397,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, DC>
         self.transition_to(maindevice, SubDeviceState::Init).await
     }
 
+    // 获取本组的所有从站引用的迭代器
     /// Get an iterator over all SubDevices in this group.
     pub fn iter<'group, 'maindevice>(
         &'group self,
@@ -351,6 +409,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, DC>
             .map(|sd| SubDeviceRef::new(maindevice, sd.configured_address, sd))
     }
 
+    // 获取本组的所有从站引用的可变迭代器
     /// Get a mutable iterator over all SubDevices in this group
     pub fn iter_mut<'group, 'maindevice>(
         &'group mut self,
@@ -369,6 +428,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, S, DC>
 where
     S: IsPreOp,
 {
+    // 完整的DC配置
     /// Configure Distributed Clock SYNC0 for all SubDevices in this group.
     ///
     /// All configured times in the [`DcConfiguration`] struct must be under `u32::MAX` nanoseconds.
@@ -412,16 +472,20 @@ where
             _state: PhantomData::<PreOp>,
         };
 
+        // 只配置支持DC的从站
         // Only configure DC for those devices that want and support it
         let dc_devices = self_.iter(maindevice).filter(|subdevice| {
             subdevice.dc_support().any() && !matches!(subdevice.dc_sync(), DcSync::Disabled)
         });
 
+        // 读取 0x910 系统时间
         let system_time = SubDeviceRef::new(maindevice, reference, ())
             .register_read::<u64>(RegisterAddress::DcSystemTime)
             .await?;
 
         // Kinda weird converting to/from u32 but these values must not exceed u32::MAX
+        // 与 u32 格式转换有点奇怪，但这些值不能超过 u32::MAX。
+        // TODO
         let sync0_period = u64::from(u32::try_from(sync0_period.as_nanos())?);
 
         let first_pulse_delay = u64::from(u32::try_from(start_delay.as_nanos())?);
@@ -434,6 +498,7 @@ where
                 subdevice.dc_sync()
             );
 
+            // FPWR 0x981 禁用SYNC0
             // Disable cyclic op, ignore WKC
             subdevice
                 .write(RegisterAddress::DcSyncActive)
@@ -441,28 +506,33 @@ where
                 .send(maindevice, 0u8)
                 .await?;
 
+            // FPWR 0x980
             // Write access to EtherCAT
             subdevice
                 .write(RegisterAddress::DcCyclicUnitControl)
                 .send(maindevice, 0u8)
                 .await?;
 
+            // 计算出 0x990 同步起始时间
             // Round first pulse time to a whole number of cycles
             let start_time = (system_time + first_pulse_delay) / sync0_period * sync0_period;
 
             fmt::debug!("--> Computed DC sync start time: {}", start_time);
 
+            // FPWR 0x990 同步起始时间
             subdevice
                 .write(RegisterAddress::DcSyncStartTime)
                 .send(maindevice, start_time)
                 .await?;
 
+            // FPWR 0x9A0 周期时间
             // Cycle time in nanoseconds
             subdevice
                 .write(RegisterAddress::DcSync0CycleTime)
                 .send(maindevice, sync0_period)
                 .await?;
 
+            // 如果使用 SYNC1 ，还需要配置 SYNC1 周期时间
             let flags = if let DcSync::Sync01 { sync1_period } = subdevice.dc_sync() {
                 let sync1_period = u64::from(u32::try_from(sync1_period.as_nanos())?);
 
@@ -476,6 +546,7 @@ where
                 SYNC0_ACTIVATE | CYCLIC_OP_ENABLE
             };
 
+            // 激活 SYNC0 和 SYNC1
             subdevice
                 .write(RegisterAddress::DcSyncActive)
                 .send(maindevice, flags)
@@ -556,6 +627,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, DC>
         self,
         maindevice: &MainDevice<'_>,
     ) -> Result<SubDeviceGroup<MAX_SUBDEVICES, MAX_PDI, R, Op, DC>, Error> {
+        // 请求切换到op状态
         self.transition_to(maindevice, SubDeviceState::Op).await
     }
 
@@ -614,10 +686,11 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, S> Default
 {
     fn default() -> Self {
         Self {
+            // ID从全局原子变量0开始加一
             id: GroupId(GROUP_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed)),
             pdi: RwLock::new(MySyncUnsafeCell::new([0u8; MAX_PDI])),
-            read_pdi_len: Default::default(),
-            pdi_len: Default::default(),
+            read_pdi_len: Default::default(), // 0
+            pdi_len: Default::default(),      // 0
             inner: MySyncUnsafeCell::new(GroupInner::default()),
             dc_conf: NoDc,
             _state: PhantomData,
@@ -642,6 +715,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, S, DC>
         self.inner().subdevices.is_empty()
     }
 
+    // 检查组里的所有从站是否在预期状态。只检查一次，如果失败返回false
     /// Check if all SubDevices in the group are the given desired state.
     async fn is_state(
         &self,
@@ -651,15 +725,21 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, S, DC>
         fmt::trace!("Check group state");
 
         let mut subdevices = self.inner().subdevices.iter();
+        let subdevices_check = self.inner().subdevices.iter();
 
         let mut total_checks = 0;
 
         // Send as many frames as required to check statuses of all subdevices
+        // 发一个帧，等待返回后才会发下一个帧
+        // TODO：应该是所有从站的数据发送后，再统一检查
         loop {
+            // 从预分配的帧存储池中找到一个可用的帧，并将其标记为"已创建"状态，以便后续用于发送 PDU 数据
             let mut frame = maindevice.pdu_loop.alloc_frame()?;
 
+            // 在帧里插入检查状态的数据报，返回剩余未检查状态的从站数组和已检查的从站数
             let (rest, num_in_this_frame) = push_state_checks(subdevices, &mut frame)?;
 
+            // 刷新待检查状态的从站数组
             subdevices = rest;
 
             // Nothing to send, we've checked all SDs
@@ -671,20 +751,27 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, S, DC>
 
             total_checks += num_in_this_frame;
 
+            // 帧设置为可发送状态Sendable，返回一个 Future，当收到对已发送帧的响应时，该 Future 将被执行。
+            // TODO：重试次数
             let frame = frame.mark_sendable(
                 &maindevice.pdu_loop,
                 maindevice.timeouts.pdu(),
                 maindevice.config.retry_behaviour.retry_count(),
             );
 
+            // 唤醒Tx任务
             maindevice.pdu_loop.wake_sender();
 
+            // 帧返回
             let received = frame.await?;
 
+            // 转换为数据报迭代器
             for pdu in received.into_pdu_iter() {
                 let pdu = pdu?;
 
+                // 解析出0x0130寄存器值
                 let result = AlControl::unpack_from_slice(&pdu)?;
+                // TODO 在这里可以检查 result.error是否为0，非0则表示从站有错误
 
                 // Return from this fn as soon as the first undesired state is found
                 if result.state != desired_state {
@@ -699,6 +786,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, S, DC>
         Ok(true)
     }
 
+    // 持续检查从站是否在预期状态，要么超时，要么报错
     /// Wait for all SubDevices in this group to transition to the given state.
     async fn wait_for_state(
         &self,
@@ -707,6 +795,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, S, DC>
     ) -> Result<(), Error> {
         async {
             loop {
+                // 检查组里的所有从站是否在预期状态。只检查一次，如果失败返回false
                 if self.is_state(maindevice, desired_state).await? {
                     break Ok(());
                 }
@@ -718,6 +807,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, S, DC>
         .await
     }
 
+    // 切换状态到指定状态
     /// Transition to a new state.
     async fn transition_to<TO>(
         mut self,
@@ -728,12 +818,13 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, S, DC>
         // SAFE-OP
         for subdevice in self.inner.get_mut().subdevices.iter_mut() {
             SubDeviceRef::new(maindevice, subdevice.configured_address(), subdevice)
-                .request_subdevice_state_nowait(desired_state)
+                .request_subdevice_state_nowait(desired_state) // 请求从站状态切换，如果有故障读取故障码并打印
                 .await?;
         }
 
         fmt::debug!("Waiting for group state {}", desired_state);
 
+        // 持续检查从站是否在预期状态，要么超时，要么报错
         self.wait_for_state(maindevice, desired_state).await?;
 
         fmt::debug!("--> Group reached state {}", desired_state);
@@ -750,6 +841,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, S, DC>
     }
 }
 
+// 在帧里插入检查状态的数据报，返回剩余未检查状态的从站数组和已检查的从站数
 fn push_state_checks<'group, 'sto, I>(
     mut subdevices: I,
     frame: &mut CreatedFrame<'sto>,
@@ -759,13 +851,16 @@ where
 {
     let mut num_in_this_frame = 0;
 
+    // 检查帧剩余空间是否能插入2字节（0x0130寄存器长度）的数据
     while frame.can_push_pdu_payload(AlControl::PACKED_LEN) {
+        // 从从站数组中获取一个从站
         let Some(sd) = subdevices.next() else {
             break;
         };
 
         // A too-long error here should be unreachable as we check if the payload can be
         // pushed in the loop condition.
+        // 插入FPRD 0x0130
         frame.push_pdu(
             Command::fprd(sd.configured_address(), RegisterAddress::AlStatus.into()).into(),
             (),
@@ -873,37 +968,53 @@ where
             self.read_pdi_len
         );
 
+        // 阻塞当前线程直到获取独占写权限（同一时间只能有一个写者，或多个读者）。
         let mut pdi_lock = self.pdi.write();
 
         let mut total_bytes_sent = 0;
+        // LRW命令的WKC总和
         let mut lrw_wkc_sum = 0;
 
         let mut subdevices = self.inner().subdevices.iter();
+        // 已检查状态的从站总数
         let mut total_checks = 0;
+        // 从站FPRD 0x0130的数组
         let mut subdevice_states = heapless::Vec::<_, MAX_SUBDEVICES>::new();
 
+        // 发送单个周期所需的所有帧,包含LRW和FPRD 0x0130
         loop {
+            // 计算未发送的PDI数据块大小
+            // TODO：chunk_len的长度需要做出限制，不能超过周期帧可容纳的大小；并且也必须是N个从站的PDO总长度，不能从中间截断
+            // 在下文push_pdu_slice_rest中会检查数据报是否能放入帧中
             let chunk_len = self.pdi_len.saturating_sub(total_bytes_sent);
 
+            // 退出条件：PDI发送完成
             if chunk_len == 0 && total_checks >= self.len() {
                 break;
             }
 
+            // 获得未发送的PDI数据块的字节切片的不可变引用
             let chunk_start = total_bytes_sent.min(self.pdi_len);
             let chunk = pdi_lock.get_mut()[chunk_start..(chunk_start + chunk_len)].as_ref();
 
+            // 从帧管理器中获取一个帧
             let mut frame = maindevice.pdu_loop.alloc_frame()?;
 
+            // 返回PduResponseHandle
             // Start offset in the EtherCAT address space
             let pushed_chunk = if !chunk.is_empty() {
                 let start_addr = self.inner().pdi_start.start_address + total_bytes_sent as u32;
 
+                // 将LRW命令放入帧中，数据区填充PDI数据块的字节切片的不可变引用
+                // 向帧写入尽可能长的数据报，返回pushed_chunk（已写入的数据报的长度和PduResponseHandle）
                 frame.push_pdu_slice_rest(Command::lrw(start_addr).into(), chunk)?
             } else {
                 None
             };
 
             // If there's space left, push as many state checks as we can into the frame
+            // 在帧里插入检查状态的数据报，返回剩余未检查状态的从站数组和已检查的从站数。
+            // TODO：周期帧里面不应该使用FPRD来读取状态，应该使用BRD
             let (rest, num_checks_in_this_frame) = push_state_checks(subdevices, &mut frame)?;
             subdevices = rest;
             total_checks += num_checks_in_this_frame;
@@ -912,20 +1023,30 @@ where
                 break;
             }
 
+            // 标记周期帧为可发送,返回ReceiveFrameFut
+            // TODO：重发次数应该为0
             let frame = frame.mark_sendable(
                 &maindevice.pdu_loop,
                 maindevice.timeouts.pdu(),
                 maindevice.config.retry_behaviour.retry_count(),
             );
 
+            // 唤醒socket poll发帧，收帧
             maindevice.pdu_loop.wake_sender();
 
+            // 等待接收完成
             let received = frame.await?;
 
+            // ethercrab没有实现完善的数据报返回机制。这里的处理方案是：本函数发送的帧第一个数据报是LRW，后续是FPRD 0x0130。
+            // 这个帧的所有数据报内容都已知，因此不用匹配
+
+            // 用于处理一帧多个数据报的情况：转换为数据报迭代器
             let mut pdus = received.into_pdu_iter();
 
+            // 通过PduResponseHandle处理接收的数据报
             // If we pushed a non-zero amount of PDI bytes, process the response
             if let Some((bytes_in_this_chunk, _pdu_handle)) = pushed_chunk {
+                // 从数据报中提取PDI数据块的字节切片，返回WKC
                 let wkc = self.process_received_pdi_chunk(
                     total_bytes_sent,
                     bytes_in_this_chunk,
@@ -933,10 +1054,12 @@ where
                     &mut pdi_lock,
                 )?;
 
+                // 更新已发送的PDI数据块大小
                 total_bytes_sent += bytes_in_this_chunk;
                 lrw_wkc_sum += wkc;
             }
 
+            // LRW命令之后就是FPRD 0x0130，获取所有从站状态
             // If there are any more PDUs, these are state checks
             for state_check_pdu in pdus {
                 let state_check_pdu = state_check_pdu?;
@@ -947,6 +1070,7 @@ where
             }
         }
 
+        // 返回总WKC和从站状态
         Ok(TxRxResponse {
             working_counter: lrw_wkc_sum,
             subdevice_states,
@@ -954,6 +1078,7 @@ where
         })
     }
 
+    // 发送 FRMW 0x0910 LRW 和 FPRD 0x0130 命令
     /// Drive the SubDevice group's inputs and outputs and synchronise EtherCAT system time with
     /// `FRMW`.
     ///
@@ -982,6 +1107,7 @@ where
             self.read_pdi_len
         );
 
+        // 可以选择参考时钟从站
         if let Some(dc_ref) = maindevice.dc_ref_address() {
             let mut total_bytes_sent = 0;
             let mut time = 0;
@@ -996,6 +1122,7 @@ where
                 let mut frame = maindevice.pdu_loop.alloc_frame()?;
 
                 let dc_handle = if !time_read {
+                    // 往帧中插入FRMW 0x0910命令
                     let dc_handle = frame.push_pdu(
                         Command::frmw(dc_ref, RegisterAddress::DcSystemTime.into()).into(),
                         0u64,
@@ -1017,6 +1144,7 @@ where
                 let pushed_chunk = if !chunk.is_empty() {
                     let start_addr = self.inner().pdi_start.start_address + total_bytes_sent as u32;
 
+                    // 将LRW命令放入帧中，数据区填充PDI数据块的字节切片的不可变引用
                     frame.push_pdu_slice_rest(Command::lrw(start_addr).into(), chunk)?
                 } else {
                     None
@@ -1054,6 +1182,8 @@ where
                 if dc_handle.is_some() {
                     let dc_pdu = pdus.next().ok_or(Error::Internal)?;
 
+                    // 获取参考时钟时间
+                    // TODO：如果发送多个周期帧，就会重复执行这块代码
                     time =
                         dc_pdu.and_then(|rx| u64::unpack_from_slice(&rx).map_err(Error::from))?;
 
@@ -1101,6 +1231,7 @@ where
         }
     }
 
+    // 从数据报中提取PDI数据块的字节切片，返回WKC
     fn process_received_pdi_chunk(
         &self,
         total_bytes_sent: usize,
@@ -1110,11 +1241,14 @@ where
     ) -> Result<u16, Error> {
         let wkc = data.working_counter;
 
+        // 计算逻辑读对应的PDI数据区中的input的字节范围
         let rx_range = total_bytes_sent.min(self.read_pdi_len)
             ..(total_bytes_sent + bytes_in_this_chunk).min(self.read_pdi_len);
 
+        // 获得LRW数据区的读写锁对应的字节切片
         let inputs_chunk = &mut pdi_lock.get_mut()[rx_range];
 
+        // 从数据报中提取PDI数据块的字节切片
         inputs_chunk.copy_from_slice(data.get(0..inputs_chunk.len()).ok_or(Error::Internal)?);
 
         Ok(wkc)
@@ -1262,6 +1396,7 @@ where
 
             let dc_handle = if !time_read {
                 let dc_handle = frame.push_pdu(
+                    // FRMW 0x0910 同步系统时间
                     Command::frmw(self.dc_conf.reference, RegisterAddress::DcSystemTime.into())
                         .into(),
                     0u64,
@@ -1283,6 +1418,7 @@ where
             let pushed_chunk = if !chunk.is_empty() {
                 let start_addr = self.inner().pdi_start.start_address + total_bytes_sent as u32;
 
+                // LRW 命令
                 frame.push_pdu_slice_rest(Command::lrw(start_addr).into(), chunk)?
             } else {
                 None

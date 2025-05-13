@@ -41,11 +41,16 @@ pub struct MainDevice<'sto> {
     /// DC reference clock.
     ///
     /// If no DC subdevices are found, this will be `0`.
+    // 参考时钟的配置地址
     dc_reference_configured_address: AtomicU16,
-    pub(crate) timeouts: Timeouts,
+    pub(crate) timeouts: Timeouts, // 用于确认从站状态切换到pre op的超时时间
+    // 还用于CoE的超时时间，等待邮箱响应的超时时间
     pub(crate) config: MainDeviceConfig,
 }
 
+// 为 MainDevice<'_> 类型手动实现 Sync trait。
+// 多数情况下，Rust 会依据类型的字段自动推断该类型是否实现 Sync。例如，若一个结构体的所有字段都实现了 Sync，那么这个结构体也会自动实现 Sync。不过，在某些特殊情形下，需要手动实现 Sync trait，特别是当类型包含一些 unsafe 代码或者特殊的内存管理逻辑时。
+// 对于 MainDevice<'_> 类型，由于它包含了一个 PduLoop<'sto> 字段，这个字段可能包含了一些 unsafe 代码或者特殊的内存管理逻辑，因此需要手动实现 Sync trait。
 unsafe impl Sync for MainDevice<'_> {}
 
 impl<'sto> MainDevice<'sto> {
@@ -64,11 +69,13 @@ impl<'sto> MainDevice<'sto> {
         }
     }
 
+    // BWR 数据全为0的数据报，不检查返回帧WKC是否正确
     /// Write zeroes to every SubDevice's memory in chunks.
     async fn blank_memory<const LEN: usize>(&self, start: impl Into<u16>) -> Result<(), Error> {
-        let start = start.into();
+        let start = start.into(); // register.rs实现了Frome，因此自动实现Into
 
         self.pdu_loop
+            // BWR 数据全为0的数据报，不检查返回帧WKC是否正确
             .pdu_broadcast_zeros(
                 start,
                 LEN as u16,
@@ -80,22 +87,28 @@ impl<'sto> MainDevice<'sto> {
 
     // FIXME: When adding a powered on SubDevice to the network, something breaks. Maybe need to reset
     // the configured address? But this broke other stuff so idk...
+    // 重置的寄存器可能还不够，没有检查WKC
     async fn reset_subdevices(&self) -> Result<(), Error> {
         fmt::debug!("Beginning reset");
 
+        // BWR 0x0120
         // Reset SubDevices to init
         Command::bwr(RegisterAddress::AlControl.into())
-            .ignore_wkc()
+            .ignore_wkc() // 不应该忽略WKC
             .send(self, AlControl::reset())
             .await?;
 
+        // 重置所有FMMU，可以一个帧完成对所有FMMU的重置。
+        // 单独对每个FMMU重置，没有使用的FMMU的返回WKC为0
         // Clear FMMUs - see ETG1000.4 Table 57
         // Some devices aren't able to blank the entire region so we loop through all offsets.
         for fmmu_idx in 0..16 {
-            self.blank_memory::<{ Fmmu::PACKED_LEN }>(RegisterAddress::fmmu(fmmu_idx))
+            self.blank_memory::<{ Fmmu::PACKED_LEN }>(RegisterAddress::fmmu(fmmu_idx)) //Fmmu::PACKED_LEN 16
                 .await?;
         }
 
+        // 重置所有SM，可以一个帧完成
+        // 单独对每个SM重置，没有使用的SM的返回WKC为0
         // Clear SMs - see ETG1000.4 Table 59
         // Some devices aren't able to blank the entire region so we loop through all offsets.
         for sm_idx in 0..16 {
@@ -103,6 +116,7 @@ impl<'sto> MainDevice<'sto> {
                 .await?;
         }
 
+        // 重置0x980、0x0910、0x0920、0x0928、0x092C、0x0981、0x0990、0x09A0、0x09A4
         // Set DC control back to EtherCAT
         self.blank_memory::<{ size_of::<u8>() }>(RegisterAddress::DcCyclicUnitControl)
             .await?;
@@ -129,10 +143,12 @@ impl<'sto> MainDevice<'sto> {
         //
         // According to ETG1020, we'll use the mode where the DC reference clock is adjusted to the
         // master clock.
+        // BWR 0x0934
         Command::bwr(RegisterAddress::DcControlLoopParam3.into())
             .ignore_wkc()
             .send(self, 0x0c00u16)
             .await?;
+        // BWR 0x0930
         // Must be after param 3 so DC control unit is reset
         Command::bwr(RegisterAddress::DcControlLoopParam1.into())
             .ignore_wkc()
@@ -144,6 +160,7 @@ impl<'sto> MainDevice<'sto> {
         Ok(())
     }
 
+    // 检测子设备，设置其配置的站地址，分配到组，从 EEPROM 配置子设备。
     /// Detect SubDevices, set their configured station addresses, assign to groups, configure
     /// SubDevices from EEPROM.
     ///
@@ -209,12 +226,26 @@ impl<'sto> MainDevice<'sto> {
     ///     .expect("Init");
     /// # };
     /// ```
+    // 检测网络上的从站设备数量
+    // 重置所有从站设备到初始状态
+    // 为每个从站设备分配配置地址
+    // 配置分布式时钟(DC)拓扑和同步
+    // 使用提供的 group_filter 闭包将设备分配到不同组
+    // 配置每个组的PDI(过程数据映像)偏移量
+    // 配置邮箱
+    // 等待所有设备进入PRE-OP状态
     pub async fn init<const MAX_SUBDEVICES: usize, G>(
         &self,
+        // now：获取当前时间的函数，用于时间戳
         now: impl Fn() -> u64 + Copy,
         groups: G,
+        // 定义闭包的函数类型
+        // 闭包参数：groups：分组容器引用，subdevice：当前从站设备引用
+        // 闭包返回值：Result<&'g dyn SubDeviceGroupHandle, Error>，表示实现了SubDeviceGroupHandle trait的组或错误
+        // group_filter：分组过滤器闭包，用于决定每个从站设备分配到哪个组
+        // 如果要分为多组，则需要设置init函数的过滤器group_filter
         mut group_filter: impl for<'g> FnMut(
-            &'g G,
+            &'g G, // 传入闭包时已经指定了G的类型
             &SubDevice,
         ) -> Result<&'g dyn SubDeviceGroupHandle, Error>,
     ) -> Result<G, Error> {
@@ -232,18 +263,24 @@ impl<'sto> MainDevice<'sto> {
             return Ok(groups);
         }
 
+        // 初始化所有从站：请求init，重置寄存器
         self.reset_subdevices().await?;
 
         // This is the only place we store the number of SubDevices, so the ordering can be
         // pretty much anything.
         self.num_subdevices.store(num_subdevices, Ordering::Relaxed);
 
+        // 使用heapless库提供的双端队列实现
+        // 创建了一个固定容量的双端队列(deque)来存储从站设备(SubDevice)实例
         let mut subdevices = heapless::Deque::<SubDevice, MAX_SUBDEVICES>::new();
 
+        // 设置从站配置地址
         // Set configured address for all discovered SubDevices
         for subdevice_idx in 0..num_subdevices {
+            // 配置地址从0x1000开始
             let configured_address = BASE_SUBDEVICE_ADDRESS.wrapping_add(subdevice_idx);
 
+            // APWR 0x0010 设置从站配置地址，没检查WKC
             Command::apwr(
                 subdevice_idx,
                 RegisterAddress::ConfiguredStationAddress.into(),
@@ -252,6 +289,10 @@ impl<'sto> MainDevice<'sto> {
             .await?;
         }
 
+        // 确认从站在init状态；从EEPROM读取从站名称和标识信息；从寄存器读取ESC支持功能，地址别名，端口，创建从站
+        // 现在对每个子设备执行初始配置。这在一个单独的循环中完成。
+        // 在所有已配置的地址设置完毕后，处理在初始化之前将已上电且地址已设置的 SD 卡添加到网络的情况。
+        // 在这种情况下，两个 SD 卡可能具有相同的地址，// 而当我们在单个配置循环进行到一半时，这些地址尚未被重置。
         // Now perform initial configuration for each subdevice. This is done in a separate loop
         // after all configured addresses are set to deal with the case where a powered on SD with a
         // set address is added to the network before init. In this case, two SDs could have the
@@ -260,6 +301,7 @@ impl<'sto> MainDevice<'sto> {
         for subdevice_idx in 0..num_subdevices {
             let configured_address = BASE_SUBDEVICE_ADDRESS.wrapping_add(subdevice_idx);
 
+            // 确认从站在init状态；从EEPROM读取从站名称和标识信息；从寄存器读取ESC支持功能，地址别名，端口，创建从站
             let subdevice = SubDevice::new(self, subdevice_idx, configured_address).await?;
 
             subdevices
@@ -271,9 +313,12 @@ impl<'sto> MainDevice<'sto> {
 
         // Configure distributed clock offsets/propagation delays, perform static drift
         // compensation. We need the SubDevices in a single list so we can read the topology.
+        // 配置分布时钟偏移/传播延迟，执行静态漂移补偿。我们需要将子设备放在一个列表中，以便读取拓扑结构。
         let dc_master = dc::configure_dc(self, subdevices.as_mut_slices().0, now).await?;
+        // 应该叫做参考时钟从站 Reference Clock Slave
 
         // If there are SubDevices that support distributed clocks, run static drift compensation
+        // 保存参考时钟地址到主站结构体中，进行时钟漂移补偿
         if let Some(dc_master) = dc_master {
             self.dc_reference_configured_address
                 .store(dc_master.configured_address(), Ordering::Relaxed);
@@ -282,28 +327,43 @@ impl<'sto> MainDevice<'sto> {
         }
 
         // This block is to reduce the lifetime of the groups map references
+        // 此块用于减少组映射引用的生命周期
         {
             // A unique list of groups so we can iterate over them and assign consecutive PDIs to each
             // one.
+            // 一个唯一的组列表，以便我们可以对它们进行迭代并为每个组分配连续的 PDI。
+            // 创建一个固定容量的哈希映射表，用于存储组 ID 到组的映射
             let mut group_map = FnvIndexMap::<_, _, MAX_SUBDEVICES>::new();
 
+            // 对从站数组的所有从站执行组分配
             while let Some(subdevice) = subdevices.pop_front() {
+                // 得到实现了 SubDeviceGroupHandle trait 的组
                 let group = group_filter(&groups, &subdevice)?;
 
                 // SAFETY: This mutates the internal SubDevice list, so a reference to `group` may not be
                 // held over this line.
+                // 安全：这会改变内部的子设备列表，因此对 `group` 的引用可能不会被保留在此行上。？？？？？？？？
+                // 添加一个从站到这个组
                 unsafe { group.push(subdevice)? };
 
+                // insert(...)：尝试将转换后的设备组 ID 作为键，UnsafeCell 包装的 group 对象作为值，插入到 group_map 中
+                // 将多个group的从站添加到一个group_map中
                 group_map
                     .insert(usize::from(group.id()), UnsafeCell::new(group))
                     .map_err(|_| Error::Capacity(Item::Group))?;
             }
 
+            // 完整的PDO映射字节数，初始(默认)为0
             let mut offset = PdiOffset::default();
 
             for (id, group) in group_map.into_iter() {
+                // 返回 UnsafeCell 内部存储的设备组的SubDeviceGroupHandle裸指针
                 let group = unsafe { *group.get() };
 
+                // 将 SubDeviceGroup 转换为 SubDeviceGroupRef 类型，同时擦除其常量泛型参数
+                // 初始化组内的所有从设备（SubDevice），并将它们置于 PRE-OP状态，同时配置组内从设备在过程数据映像（PDI）中的映射。
+                // 这里会修改pdi_position的start_address
+                // 通过EEOROM数据配置邮箱，切换到PreOp，读取对象字典中的0x1c00同步管理器类型，保存邮箱配置
                 offset = group.as_ref().into_pre_op(offset, self).await?;
 
                 fmt::debug!("After group ID {} offset: {:?}", id, offset);
@@ -313,11 +373,13 @@ impl<'sto> MainDevice<'sto> {
         }
 
         // Check that all SubDevices reached PRE-OP
+        // 等待所有从站切换到指定状态，如果出现故障则打印错误码，返回
         self.wait_for_state(SubDeviceState::PreOp).await?;
 
         Ok(groups)
     }
 
+    //此方法将请求并等待所有子设备处于“PRE-OP”状态后再返回。
     /// A convenience method to allow the quicker creation of a single group containing all
     /// discovered SubDevices.
     ///
@@ -399,6 +461,7 @@ impl<'sto> MainDevice<'sto> {
     /// # Ok::<(), ethercrab::error::Error>(())
     /// # };
     /// ```
+    // 快速创建一个包含所有已发现从站设备的单一组
     pub async fn init_single_group<const MAX_SUBDEVICES: usize, const MAX_PDI: usize>(
         &self,
         now: impl Fn() -> u64 + Copy,
@@ -410,10 +473,13 @@ impl<'sto> MainDevice<'sto> {
             .await
     }
 
+    // BRD 0x0000
     /// Count the number of SubDevices on the network.
     async fn count_subdevices(&self) -> Result<u16, Error> {
         Command::brd(RegisterAddress::Type.into())
-            .receive_wkc::<u8>(self)
+            //带有泛型参数的函数或结构体在使用时，当类型无法推断时，必须显式指定具体类型
+            .receive_wkc::<u8>(self) // 指定读取长度为 1 字节(u8)，对应 Type 寄存器的大小
+            // 必须指定 u8 因为返回值不携带类型信息
             .await
     }
 
@@ -433,11 +499,13 @@ impl<'sto> MainDevice<'sto> {
     }
 
     /// Wait for all SubDevices on the network to reach a given state.
+    // 等待所有从站切换到指定状态，如果出现故障则打印错误码，返回
     pub async fn wait_for_state(&self, desired_state: SubDeviceState) -> Result<(), Error> {
         let num_subdevices = self.num_subdevices.load(Ordering::Relaxed);
 
         async {
             loop {
+                // BRD 0x0130 读取状态
                 let status = Command::brd(RegisterAddress::AlStatus.into())
                     .with_wkc(num_subdevices)
                     .receive::<AlControl>(self)
@@ -445,12 +513,14 @@ impl<'sto> MainDevice<'sto> {
 
                 fmt::trace!("Global AL status {:?}", status);
 
+                // 如果状态切换出错
                 if status.error {
                     fmt::error!(
                         "Error occurred transitioning all SubDevices to {:?}",
                         desired_state,
                     );
 
+                    // FPRD 0x0134 读取每个从站的故障码，打印
                     for subdevice_addr in BASE_SUBDEVICE_ADDRESS
                         ..(BASE_SUBDEVICE_ADDRESS + self.num_subdevices() as u16)
                     {
@@ -475,6 +545,7 @@ impl<'sto> MainDevice<'sto> {
                     break Ok(());
                 }
 
+                // TODO：这个超时时间应该单独一个
                 self.timeouts.loop_tick().await;
             }
         }
@@ -487,6 +558,7 @@ impl<'sto> MainDevice<'sto> {
         self.pdu_loop.max_frame_data()
     }
 
+    // 发送一个只包含一个EtherCAT数据报的帧
     /// Send a single PDU in a frame.
     pub(crate) async fn single_pdu(
         &'sto self,
@@ -494,18 +566,28 @@ impl<'sto> MainDevice<'sto> {
         data: impl EtherCrabWireWrite,
         len_override: Option<u16>,
     ) -> Result<ReceivedPdu<'sto>, Error> {
+        // 从预分配的帧存储池中找到一个可用的帧，并将其标记为"已创建"状态，以便后续用于发送 PDU 数据
         let mut frame = self.pdu_loop.alloc_frame()?;
 
+        // 在帧中插入一个数据报
+        // 因为上文获取了新的帧，所以空间一定是足够的，如果不够，是数据报创建有问题。数据报的数据区应该检查总长度
         let handle = frame.push_pdu(command, data, len_override)?;
 
+        // 帧设置为可发送状态Sendable，返回一个 Future，当收到对已发送帧的响应时，该 Future 将被执行。
+        // 前文已经写入帧的数据报，以太网帧头，本函数会写入EtherCAT帧头，组帧完成。
         let frame = frame.mark_sendable(
             &self.pdu_loop,
             self.timeouts.pdu(),
             self.config.retry_behaviour.retry_count(),
         );
 
+        // 唤醒Tx任务
         self.pdu_loop.wake_sender();
 
+        // 开始轮询 ReceiveFrameFut。成功后，帧状态为 RxProcessing
+        // 从返回的帧中获取数据报的报头和WKC，没有检查WKC是否正确
+        // ethercrab没有实现完善的数据报返回机制。这里的处理方案是：本函数发送只包含一个数据报的帧，因此返回的帧的第一个数据报就是请求的帧。
+        // 只能返回第一个数据报，后续数据报会被丢弃。
         frame.await?.first_pdu(handle)
     }
 

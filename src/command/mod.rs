@@ -80,6 +80,7 @@ const LRW: u8 = 0x0c;
 #[derive(Default, PartialEq, Eq, Debug, Copy, Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+// 准确含义是命令对应的地址。然后分别读和写，调用的函数是不同的
 pub enum Command {
     /// No operation.
     #[default]
@@ -93,6 +94,7 @@ pub enum Command {
 }
 
 impl EtherCrabWireSized for Command {
+    // 地址和寄存器各占2字节，总共4字节，或者逻辑地址占4字节
     const PACKED_LEN: usize = 4;
 
     type Buffer = [u8; Self::PACKED_LEN];
@@ -206,7 +208,9 @@ impl Command {
     /// APWR.
     pub fn apwr(address: u16, register: u16) -> WrappedWrite {
         WrappedWrite::new(Writes::Apwr {
-            address: 0u16.wrapping_sub(address),
+            address: 0u16.wrapping_sub(address), // 计算自动递增地址
+            // wrapping_sub 是 Rust 标准库中的一个方法，属于整数类型的包装运算(wrapping operations)。它的作用是执行减法运算并在溢出时进行包装处理，而不是引发 panic 或返回错误
+            // 0u16.wrapping_sub(1) 会得到 65535 (即 u16::MAX)
             register,
         })
     }
@@ -253,6 +257,7 @@ impl Command {
     }
 }
 
+// From trait 实现，其作用是把 Reads 类型的值转换为 Command 类型的值
 impl From<Reads> for Command {
     fn from(value: Reads) -> Self {
         Self::Read(value)

@@ -1,5 +1,6 @@
 use crate::subdevice_state::SubDeviceState;
 
+// 0x130状态寄存器，2字节
 /// The AL control/status word for an individual SubDevice.
 ///
 /// Defined in ETG1000.6 Table 9 - AL Control Description.
@@ -15,7 +16,7 @@ pub struct AlControl {
     pub error: bool,
     /// ID request flag.
     #[wire(bits = 1, post_skip = 10)]
-    pub id_request: bool,
+    pub id_request: bool, // 设备标识请求
 }
 
 impl AlControl {
@@ -27,6 +28,7 @@ impl AlControl {
         }
     }
 
+    // 请求到init状态
     pub fn reset() -> Self {
         Self {
             state: SubDeviceState::Init,

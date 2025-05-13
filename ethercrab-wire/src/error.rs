@@ -2,7 +2,7 @@
 
 /// Wire encode/decode errors.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt-03", derive(defmt::Format))] //条件编译属性。当启用 defmt-03 特性时，自动为 WireError 枚举实现 defmt::Format 特质，以便使用 defmt 日志库进行格式化输出。
 pub enum WireError {
     /// The buffer to extract a type from is too short to do so.
     ReadBufferTooShort,
@@ -19,7 +19,7 @@ pub enum WireError {
     InvalidUtf8,
 }
 
-#[cfg(feature = "std")]
+#[cfg(feature = "std")] //条件编译属性。只有当启用 std 特性时，才会为 WireError 枚举实现 std::error::Error 特质。该特质是 Rust 标准库中表示错误的基础特质。
 impl std::error::Error for WireError {}
 
 impl core::fmt::Display for WireError {

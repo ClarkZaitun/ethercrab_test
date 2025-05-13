@@ -4,22 +4,29 @@ use core::ops::Range;
 /// to/from the PDI using FMMUs.
 ///
 /// PDI mappings are byte-aligned per each SubDevice.
+// 一个累加器，用于存储 PDI 中的位和字节偏移量，以便子设备 IO 数据能够使用 FMMU 映射到 PDI 或从 PDI 映射。
+// 每个子设备的 PDI 映射都是字节对齐的。
+// 说人话就是PDO映射的偏移量。在初始化过程中，每个子设备的PDO映射偏移量会累加起来，
+// 最终形成一个完整的PDO映射字节数
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct PdiOffset {
+    // 逻辑地址
     pub start_address: u32,
     // // Unused, but will become useful if we support bit-packed PDI mappings in the future.
-    // start_bit: u8,
+    // start_bit: u8, // 注释掉了位偏移
 }
 
 impl PdiOffset {
     /// Increment the address accumulator by a given number of bits, aligned to the next byte.
+    // 将地址累加器增加给定的位数，与下一个字节对齐。
     pub fn increment_byte_aligned(self, bits: u16) -> Self {
         let inc_bytes = (bits + 7) / 8;
 
         self.increment_inner(0, inc_bytes)
     }
 
+    // start_address 增加 bytes字节
     pub fn increment(self, bytes: u16) -> Self {
         self.increment_inner(0, bytes)
     }
@@ -68,9 +75,12 @@ impl PdiOffset {
     // }
 }
 
+// 逻辑地址范围
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct PdiSegment {
+    // Range 是 Rust 标准库中的结构体，用于表示一个半开区间 [start, end)
+    // bytes 字段表示 PDI 中一段数据的字节范围。
     pub bytes: Range<usize>,
     // pub bit_len: usize,
 }

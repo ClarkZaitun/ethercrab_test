@@ -30,7 +30,7 @@ use tokio::time::MissedTickBehavior;
 /// Maximum number of SubDevices that can be stored. This must be a power of 2 greater than 1.
 const MAX_SUBDEVICES: usize = 16;
 /// Maximum PDU data payload size - set this to the max PDI size or higher.
-const MAX_PDU_DATA: usize = PduStorage::element_size(1100);
+const MAX_PDU_DATA: usize = PduStorage::element_size(1100); //1100+28
 /// Maximum number of EtherCAT frames that can be in flight at any one time.
 const MAX_FRAMES: usize = 16;
 /// Maximum total PDI length.

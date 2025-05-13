@@ -77,7 +77,7 @@ mod field {
 }
 
 /// The Ethernet header length
-pub const ETHERNET_HEADER_LEN: usize = field::PAYLOAD.start;
+pub const ETHERNET_HEADER_LEN: usize = field::PAYLOAD.start; //14
 
 impl<T: AsRef<[u8]>> EthernetFrame<T> {
     /// Imbue a raw octet buffer with Ethernet frame structure.

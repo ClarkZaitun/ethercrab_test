@@ -26,10 +26,12 @@ use ethercrab_wire::EtherCrabWireSized;
 
 /// Smallest frame size with a data payload of 0 length
 const MIN_DATA: usize = EthernetFrame::<&[u8]>::buffer_len(
-    EthercatFrameHeader::header_len()
-                    + super::pdu_header::PduHeader::PACKED_LEN
+    //28
+    //14+
+    EthercatFrameHeader::header_len() //2
+                    + super::pdu_header::PduHeader::PACKED_LEN //10？
                     // PDU payload
-                    + PduFlags::const_default().len() as usize
+                    + PduFlags::const_default().len() as usize //0
                     // Working counter
                     + 2,
 );
@@ -297,8 +299,8 @@ impl<'sto> PduStorageRef<'sto> {
     }
 }
 
-unsafe impl Send for PduStorageRef<'_> {}
-unsafe impl Sync for PduStorageRef<'_> {}
+unsafe impl<'sto> Send for PduStorageRef<'sto> {}
+unsafe impl<'sto> Sync for PduStorageRef<'sto> {}
 
 #[cfg(test)]
 mod tests {

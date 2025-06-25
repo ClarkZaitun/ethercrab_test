@@ -71,6 +71,8 @@ impl PdiOffset {
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct PdiSegment {
+    // Range 是 Rust 标准库中的结构体，用于表示一个半开区间 [start, end)
+    // bytes 字段表示 PDI 中一段数据的字节范围。
     pub bytes: Range<usize>,
     // pub bit_len: usize,
 }

@@ -2,42 +2,43 @@ use crate::help::{all_valid_attrs, attr_exists, bit_width_attr, usize_attr};
 use std::ops::Range;
 use syn::{DataStruct, DeriveInput, Fields, FieldsNamed, Ident, Type, Visibility};
 
+// 元数据结构，用于描述需要被序列化/反序列化的 Rust 结构体的布局信息
 #[derive(Clone)]
 pub struct StructMeta {
     /// Width in bits on the wire.
-    pub width_bits: usize,
+    pub width_bits: usize, // 整个结构体在二进制数据流中占用的总比特数
 
-    pub fields: Vec<FieldMeta>,
+    pub fields: Vec<FieldMeta>, // 结构体中每个字段的元数据信息
 }
 
 #[derive(Clone)]
 pub struct FieldMeta {
     #[allow(unused)]
-    pub vis: Visibility,
-    pub name: Ident,
-    pub ty: Type,
+    pub vis: Visibility, // 字段的可见性(public/private等)
+    pub name: Ident, // 字段名称标识符
+    pub ty: Type,    //字段类型信息
     // Will be None for arrays
-    pub ty_name: Option<Ident>,
+    pub ty_name: Option<Ident>, // 字段类型名称(仅适用于简单类型路径)
     #[allow(unused)]
-    pub bit_start: usize,
+    pub bit_start: usize, // 字段在比特流中的起始/结束位置
     #[allow(unused)]
     pub bit_end: usize,
     #[allow(unused)]
-    pub byte_start: usize,
+    pub byte_start: usize, // 字段在字节流中的起始/结束位置
     #[allow(unused)]
     pub byte_end: usize,
     /// Offset of the starting bit in the starting byte.
-    pub bit_offset: usize,
+    pub bit_offset: usize, // 字段在起始字节中的比特偏移量
 
-    pub bits: Range<usize>,
-    pub bytes: Range<usize>,
+    pub bits: Range<usize>,  // 字段占用的比特范围
+    pub bytes: Range<usize>, // 字段占用的字节范围
 
     #[allow(unused)]
-    pub pre_skip: Option<usize>,
+    pub pre_skip: Option<usize>, // 字段前后的填充比特数(可选)
     #[allow(unused)]
     pub post_skip: Option<usize>,
 
-    pub skip: bool,
+    pub skip: bool, //  是否跳过该字段(不进行序列化/反序列化)
 }
 
 pub fn parse_struct(

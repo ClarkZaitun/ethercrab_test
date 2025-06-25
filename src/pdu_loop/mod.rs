@@ -94,6 +94,7 @@ impl<'sto> PduLoop<'sto> {
         self.storage.tx_waker.wake();
     }
 
+    // BWR 数据全为0的数据报，不检查返回帧WKC是否正确
     /// Broadcast (BWR) a packet full of zeroes, up to `payload_length`.
     pub(crate) async fn pdu_broadcast_zeros(
         &self,
@@ -115,6 +116,7 @@ impl<'sto> PduLoop<'sto> {
         Ok(())
     }
 
+    // 从预分配的帧存储池中找到一个可用的帧，并将其标记为"已创建"状态，以便后续用于发送 PDU 数据
     pub(crate) fn alloc_frame(&self) -> Result<CreatedFrame<'sto>, Error> {
         self.storage.alloc_frame()
     }

@@ -13,10 +13,10 @@ exclude = ["dumps", "doc", "NOTES.md", "SPECNOTES.md"]
 resolver = "2"
 rust-version = "1.85"
 
-[workspace]
-members = ["ethercrab-wire", "ethercrab-wire-derive"]
+[workspace]#工作区的配置部分。工作区允许你在一个项目中管理多个相互关联的 crate，这些 crate 可以共享依赖，统一构建和测试。
+members = ["ethercrab-wire", "ethercrab-wire-derive"]#该字段列出了工作区包含的子 crate 列表。["ethercrab-wire", "ethercrab-wire-derive"] 表明工作区包含 ethercrab-wire 和 ethercrab-wire-derive 这两个子 crate。Cargo 会在当前目录下查找这两个子 crate 对应的目录。
 
-[package.metadata.docs.rs]
+[package.metadata.docs.rs] #docs.rs 服务的元数据配置。docs.rs 是 Rust 官方的文档托管服务，用于自动构建和托管 Rust 项目的文档。
 default-target = "x86_64-unknown-linux-gnu"
 targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-gnu"]
 
@@ -25,7 +25,7 @@ async-io = { version = "2.0.0", optional = true }
 atomic-waker = "1.1.2"
 atomic_enum = "0.3.0"
 bitflags = "2.9.0"
-defmt = { version = "0.3.5", optional = true }
+defmt = { version = "0.3.5", optional = true } #optional = true：表示该依赖是可选的。默认情况下，Cargo 编译项目时不会包含这个依赖。若要使用 defmt 库，需要在 Cargo.toml 的 [features] 部分定义一个特性来启用它，或者在编译时通过 --features 选项手动启用。
 embassy-time = "0.4.0"
 embedded-io-async = { version = "0.6.0", default-features = false }
 futures-lite = { version = "2.0.0", default-features = false }
@@ -117,8 +117,12 @@ name = "xdp"
 required-features = ["std", "xdp"]
 
 [[example]]
-name = "dc"
-required-features = ["std"]
+name = "xdp"
+required-features = ["std", "xdp"]
+
+[[example]] # 这是一个数组表（array of tables）语法，用于定义项目中的示例代码。每个 [[example]] 块代表一个独立的示例。
+name = "dc" # 指定示例代码文件的名称，Rust 会在项目的 examples 目录下查找与该名称匹配的 .rs 文件
+required-features = ["std"] # 指定示例代码所需的特性（features）。这里指定了 "std" 特性，表示示例代码需要标准库的支持。
 
 # [[example]]
 # name = "ec400"
@@ -132,14 +136,14 @@ required-features = ["std"]
 name = "multiple-groups"
 required-features = ["std"]
 
-[[bench]]
-name = "pdu_loop"
-harness = false
+[[bench]] # 这是一个数组表（array of tables）语法，用于定义项目中的基准测试代码。每个 [[bench]] 块代表一个独立的基准测试。
+name = "pdu_loop" # 指定基准测试代码文件的名称，Rust 会在项目的 benches 目录下查找与该名称匹配的.rs 文件
+harness = false   # 表示不使用默认的基准测试框架。默认情况下，Cargo 会提供一个基准测试框架，设置为 false 后，开发者需要自己实现基准测试逻辑。
 
 [[bench]]
 name = "frame"
 harness = false
 
-[profile.profiling]
-inherits = "release"
-debug = true
+[profile.profiling] #定义一个名为 profiling 的自定义构建配置文件。在 Cargo 中，profile 用于配置不同构建模式（如 dev、release）的编译选项。
+inherits = "release" # 表示 profiling 配置继承 release 配置的所有设置，这意味着 profiling 模式会采用 release 模式的优化级别等编译选项。
+debug = true #在继承 release 配置的基础上，开启调试信息。这样在 profiling 模式下编译的代码既具有较高的优化程度，又包含调试信息，方便进行性能分析和调试。

@@ -456,6 +456,8 @@ pub(crate) trait IgnoreNoCategory<T> {
 }
 
 impl<T> IgnoreNoCategory<T> for Result<T, Error> {
+    // 将 Result<T, Error> 类型中可能出现的 Error::Eeprom(EepromError::NoCategory) 错误转换为 Ok(None)
+    // 方便在处理 EEPROM 相关操作时忽略 NoCategory 错误
     fn ignore_no_category(self) -> Result<Option<T>, Error> {
         match self {
             Ok(result) => Ok(Some(result)),

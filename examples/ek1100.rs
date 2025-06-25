@@ -42,6 +42,8 @@ static PDU_STORAGE: PduStorage<MAX_FRAMES, MAX_PDU_DATA> = PduStorage::new();
 async fn main() -> Result<(), Error> {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
+    //从命令行参数中获取网络接口名称，并将其赋值给变量 interface。
+    //如果没有提供网络接口名称，则会触发 panic 并显示错误消息 "Provide network interface as first argument."。
     let interface = std::env::args()
         .nth(1)
         .expect("Provide network interface as first argument.");
@@ -52,8 +54,10 @@ async fn main() -> Result<(), Error> {
     );
     log::info!("Run with RUST_LOG=ethercrab=debug or =trace for debug information");
 
+    //从 PDU_STORAGE 实例中拆分出发送通道、接收通道和 PDU 循环处理对象，用于后续的 EtherCAT 通信
     let (tx, rx, pdu_loop) = PDU_STORAGE.try_split().expect("can only split once");
 
+    //创建一个 MainDevice 实例，并使用 Arc （原子引用计数）进行包装，以便在多线程环境下安全地共享该实例。
     let maindevice = Arc::new(MainDevice::new(
         pdu_loop,
         Timeouts {
@@ -74,9 +78,15 @@ async fn main() -> Result<(), Error> {
         )
         .expect("TX/RX task")
     });
+
+    //异步地启动一个任务，该任务负责处理 EtherCAT 数据的发送和接收
+    //tx_rx_task返回的TxRxFut从表面看它只是一个结构体，但 Rust 里借助实现 Future trait 能把结构体转变为异步任务
+    //Future trait会实现 poll 方法：负责推进异步计算。
+    //在每次调用 poll 方法时，Future 会检查自己的状态，如果状态已经就绪（即完成），则返回 Poll::Ready 结果；如果状态未就绪，则返回 Poll::Pending 结果。
     #[cfg(not(target_os = "windows"))]
     tokio::spawn(ethercrab::std::tx_rx_task(&interface, tx, rx).expect("spawn TX/RX task"));
 
+    // 此方法将请求并等待所有子设备处于“PRE-OP”状态后再返回。
     let group = maindevice
         .init_single_group::<MAX_SUBDEVICES, PDI_LEN>(ethercat_now)
         .await

@@ -24,14 +24,13 @@ use core::{
 };
 use ethercrab_wire::EtherCrabWireSized;
 
-/// Smallest frame size with a data payload of 0 length
+/// Smallest frame size with a data payload of 0 length //28
 const MIN_DATA: usize = EthernetFrame::<&[u8]>::buffer_len(
-    //28
-    //14+
+    //ethernet header 14 +
     EthercatFrameHeader::header_len() //2
-                    + super::pdu_header::PduHeader::PACKED_LEN //10？
+                    + super::pdu_header::PduHeader::PACKED_LEN // 10？
                     // PDU payload
-                    + PduFlags::const_default().len() as usize //0
+                    + PduFlags::const_default().len() as usize // 0
                     // Working counter
                     + 2,
 );
@@ -42,9 +41,13 @@ const MIN_DATA: usize = EthernetFrame::<&[u8]>::buffer_len(
 /// The number of storage elements `N` must be a power of 2.
 pub struct PduStorage<const N: usize, const DATA: usize> {
     frames: UnsafeCell<MaybeUninit<[FrameElement<DATA>; N]>>,
+    // 缓冲区中的帧索引，用于遍历缓冲区
     frame_idx: AtomicU8,
+    // 数据报的index
     pdu_idx: AtomicU8,
+    // 用于在初始化时标记是否已经从这个帧缓冲区PduStorage分割出：发送通道、接收通道和 PDU 循环
     is_split: AtomicBool,
+    //
     /// A waker used to wake up the TX task when a new frame is ready to be sent.
     pub(in crate::pdu_loop) tx_waker: AtomicWaker,
     /// A flag used to signal that the TX/RX loop should exit.
@@ -77,6 +80,7 @@ impl PduStorage<0, 0> {
     /// let storage = PduStorage::<NUM_FRAMES, FRAME_SIZE>::new();
     /// ```
     pub const fn element_size(data_len: usize) -> usize {
+        //用const定义常量函数，常量函数能在编译时执行，生成编译时常量。
         MIN_DATA + data_len
     }
 }
@@ -114,11 +118,11 @@ impl<const N: usize, const DATA: usize> PduStorage<N, DATA> {
         if N > 1 {
             assert!(
                 N.count_ones() == 1,
-                "The number of storage elements must be a power of 2"
+                "The number of storage elements must be a power of 2" // ？？
             );
         }
 
-        let frames = UnsafeCell::new(MaybeUninit::zeroed());
+        let frames = UnsafeCell::new(MaybeUninit::zeroed()); //  会创建一个未初始化的 [FrameElement<DATA>; N] 数组，并将其内存填充为零字节（所有位为 0）。自动调用FrameElement::default()？
 
         Self {
             frames,
@@ -139,14 +143,15 @@ impl<const N: usize, const DATA: usize> PduStorage<N, DATA> {
     ///
     /// To maintain ownership and lifetime invariants, `try_split` will return an error if called
     /// more than once on any given `PduStorage`.
-    #[allow(clippy::result_unit_err)]
+    #[allow(clippy::result_unit_err)] //禁止 clippy 工具对 Result 类型使用 () 作为错误类型的警告。
     pub fn try_split(&self) -> Result<(PduTx<'_>, PduRx<'_>, PduLoop<'_>), ()> {
         self.is_split
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed) //Ordering::AcqRel 表示在成功时具有获取和释放语义，Ordering::Relaxed 表示在失败时使用宽松的内存顺序。
             // TODO: Make try_split const when ? is allowed in const methods, tracking issue
             // <https://github.com/rust-lang/rust/issues/74935>
-            .map_err(|_| ())?;
+            .map_err(|_| ())?; //将 compare_exchange 返回的错误转换为 ()，如果操作失败（即 is_split 已经为 true），则提前返回错误。
 
+        //将 PduStorage 转换为 PduStorageRef 类型的引用
         let storage = self.as_ref();
 
         Ok((
@@ -158,7 +163,13 @@ impl<const N: usize, const DATA: usize> PduStorage<N, DATA> {
 
     fn as_ref(&self) -> PduStorageRef {
         PduStorageRef {
+            //get() 方法返回其内部的裸指针，然后通过 cast() 方法将其转换为 NonNull<FrameElement<DATA>> 类型。
+            //NonNull::new_unchecked() 方法用于创建一个非空的裸指针，它接受一个非空的裸指针作为参数，并返回一个 NonNull 类型的指针。
             frames: unsafe { NonNull::new_unchecked(self.frames.get().cast()) },
+            //Layout::array::<FrameElement<DATA>>(N) 创建一个包含 N 个 FrameElement<DATA> 类型元素的数组的内存布局。
+            //unwrap() 方法用于获取布局的大小（size），并返回一个 usize 类型的值。
+            //size() / N 表示每个 FrameElement 在内存中的字节跨度，用于计算不同帧元素在内存中的偏移量。
+            //N 表示存储的帧元素的数量。
             frame_element_stride: Layout::array::<FrameElement<DATA>>(N).unwrap().size() / N,
             num_frames: N,
             frame_data_len: DATA,
@@ -166,22 +177,29 @@ impl<const N: usize, const DATA: usize> PduStorage<N, DATA> {
             pdu_idx: &self.pdu_idx,
             tx_waker: &self.tx_waker,
             exit_flag: &self.exit_flag,
+            //标记 PduStorageRef 对象的生命周期，确保其生命周期与 PduStorage 实例一致。
             _lifetime: PhantomData,
         }
     }
 }
 
+//该结构体用于引用 PduStorage 实例，封装了对 PduStorage 内部状态的访问。
 #[derive(Debug, Clone)]
 pub(crate) struct PduStorageRef<'sto> {
+    //NonNull<FrameElement<0>> 是一个非空裸指针，指向 FrameElement<0> 类型的对象。NonNull 类型保证指针不为空，用于安全地操作 PduStorage 中的帧元素数组
     frames: NonNull<FrameElement<0>>,
     /// Stride in bytes used to calculate frame element index pointer offsets.
+    //表示每个 FrameElement 在内存中的字节跨度，用于计算不同帧元素在内存中的偏移量。
     frame_element_stride: usize,
+    //记录 PduStorage 中存储的帧元素的数量。
     pub num_frames: usize,
+    //表示每个帧元素的数据长度，在缓冲区初始化时通过DATA确定
     pub frame_data_len: usize,
     frame_idx: &'sto AtomicU8,
     pub pdu_idx: &'sto AtomicU8,
     pub tx_waker: &'sto AtomicWaker,
     pub exit_flag: &'sto AtomicBool,
+    //PhantomData<&'sto ()> 是一个零大小类型，用于标记结构体的生命周期。虽然结构体中没有直接持有 'sto 生命周期的具体数据，但通过 PhantomData 可以让编译器进行正确的生命周期检查。
     _lifetime: PhantomData<&'sto ()>,
 }
 
@@ -200,8 +218,10 @@ impl<'sto> PduStorageRef<'sto> {
         }
     }
 
+    // 从预分配的帧存储池中找到一个可用的帧，并将其标记为"已创建"状态，以便后续用于发送 PDU 数据
     /// Allocate a PDU frame with the given command and data length.
     pub(in crate::pdu_loop) fn alloc_frame(&self) -> Result<CreatedFrame<'sto>, Error> {
+        // 这里有数据同步问题？数据处理是否可以在一个线程中顺序执行
         // Find next frame that is not currently in use.
         //
         // Escape hatch: we'll only loop through the frame storage array twice to put an upper
@@ -215,12 +235,15 @@ impl<'sto> PduStorageRef<'sto> {
 
             fmt::trace!("Try to allocate frame {}", frame_idx);
 
+            //通过传入的索引计算对应帧元素的内存地址，并返回一个非空裸指针（高效：操作指针而不是复制）
+            // Claim 帧，使其具有唯一的所有者，直到其响应数据被删除。必须在初始化之前声明它，以避免其他线程可能声明同一帧的竞争条件。争用条件通过帧中的原子状态变量和上面的原子索引计数器来缓解。
             // Claim frame so it has a unique owner until its response data is dropped. It must be
             // claimed before initialisation to avoid race conditions with other threads potentially
             // claiming the same frame. The race conditions are mitigated by an atomic state
             // variable in the frame, and the atomic index counter above.
             let frame = self.frame_at_index(usize::from(frame_idx));
 
+            // 获得一个重置过的帧
             let frame =
                 CreatedFrame::claim_created(frame, frame_idx, self.pdu_idx, self.frame_data_len);
 
@@ -237,6 +260,7 @@ impl<'sto> PduStorageRef<'sto> {
         Err(PduError::SwapState.into())
     }
 
+    // Sent 状态的帧标记为 RxBusy 状态
     /// Updates state from SENDING -> RX_BUSY
     pub(in crate::pdu_loop) fn claim_receiving(
         &self,
@@ -250,6 +274,7 @@ impl<'sto> PduStorageRef<'sto> {
 
         fmt::trace!("--> Claim receiving frame index {}", frame_idx);
 
+        // Sent 状态的帧标记为 RxBusy 状态，返回ReceivingFrame类型对象
         ReceivingFrame::claim_receiving(
             self.frame_at_index(frame_idx),
             self.pdu_idx,
@@ -257,6 +282,7 @@ impl<'sto> PduStorageRef<'sto> {
         )
     }
 
+    //根据给定的首个 PDU 索引，在存储的帧元素中查找对应的帧
     pub(in crate::pdu_loop) fn frame_index_by_first_pdu_index(
         &self,
         search_pdu_idx: u8,
@@ -266,11 +292,12 @@ impl<'sto> PduStorageRef<'sto> {
             let frame = unsafe {
                 NonNull::new_unchecked(
                     self.frames
-                        .as_ptr()
-                        .byte_add(frame_index * self.frame_element_stride),
+                        .as_ptr() //将 NonNull<FrameElement<0>> 类型的 self.frames 转换为原始裸指针
+                        .byte_add(frame_index * self.frame_element_stride), //将指针偏移 frame_index * self.frame_element_stride 字节，得到当前帧元素的内存地址
                 )
             };
 
+            //检查当前帧的首个 PDU 索引是否与 search_pdu_idx 相等
             if unsafe { FrameElement::<0>::first_pdu_is(frame, search_pdu_idx) } {
                 return Some(frame_index as u8);
             }
@@ -279,21 +306,23 @@ impl<'sto> PduStorageRef<'sto> {
         None
     }
 
+    //通过传入的索引计算对应帧元素的内存地址，并返回一个非空裸指针（高效：操作指针而不是复制）
     /// Retrieve a frame at the given index.
     ///
     /// If the given index is greater than the value in `PduStorage::N`, this will return garbage
     /// data off the end of the frame element buffer.
     pub(crate) fn frame_at_index(&self, idx: usize) -> NonNull<FrameElement<0>> {
-        assert!(idx < self.num_frames);
+        assert!(idx < self.num_frames); //如果 idx 超出存储的帧元素的数量，程序会触发 panic，避免访问越界内存。
 
         // SAFETY: `self.frames` was created by Rust, so will always be valid. The index is checked
         // that it doesn't extend past the end of the storage array above, so we should never return
         // garbage data as long as `self.frame_element_stride` is computed correctly.
         unsafe {
+            //将计算得到的裸指针封装为 NonNull 类型。new_unchecked 方法不会检查指针是否为空，调用者需要确保传入的指针非空
             NonNull::new_unchecked(
                 self.frames
-                    .as_ptr()
-                    .byte_add(idx * self.frame_element_stride),
+                    .as_ptr() //将 NonNull<FrameElement<0>> 类型的 self.frames 转换为原始裸指针
+                    .byte_add(idx * self.frame_element_stride), //将指针偏移 idx * self.frame_element_stride 字节
             )
         }
     }

@@ -58,7 +58,8 @@ pub struct WrappedRead {
     /// EtherCAT command.
     pub command: Reads,
     /// Expected working counter.
-    wkc: Option<u16>,
+    wkc: Option<u16>, // 预期WKC
+                      //什么时候设置的？
 }
 
 impl WrappedRead {
@@ -84,6 +85,8 @@ impl WrappedRead {
         }
     }
 
+    // 接收数据并解码为类型T
+    // 有WKC预期值时检查WKC是否符合预期，否则直接返回WKC
     /// Receive data and decode into a `T`.
     pub async fn receive<'maindevice, T>(
         self,
@@ -95,9 +98,10 @@ impl WrappedRead {
         self.common(maindevice, T::PACKED_LEN as u16)
             .await?
             .maybe_wkc(self.wkc)
-            .and_then(|data| Ok(T::unpack_from_slice(&data)?))
+            .and_then(|data| Ok(T::unpack_from_slice(&data)?)) //使用 T::unpack_from_slice 将接收到的字节数据解码为类型 T
     }
 
+    // 接收字节流，作为字节切片返回
     /// Receive a given number of bytes and return it as a slice.
     pub async fn receive_slice<'maindevice>(
         self,
@@ -107,6 +111,7 @@ impl WrappedRead {
         self.common(maindevice, len).await?.maybe_wkc(self.wkc)
     }
 
+    // 只返回WKC
     /// Receive only the working counter.
     ///
     /// Any expected working counter value will be ignored when calling this method, regardless of
@@ -119,7 +124,7 @@ impl WrappedRead {
         maindevice: &'maindevice MainDevice<'maindevice>,
     ) -> Result<u16, Error>
     where
-        T: EtherCrabWireRead + EtherCrabWireSized,
+        T: EtherCrabWireRead + EtherCrabWireSized, //为什么不写EtherCrabWireReadSized呢？
     {
         self.common(maindevice, T::PACKED_LEN as u16)
             .await

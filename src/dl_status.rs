@@ -5,6 +5,7 @@
     derive(arbitrary::Arbitrary, ethercrab_wire::EtherCrabWireReadWrite)
 )]
 #[wire(bytes = 2)]
+// 0x0110寄存器
 pub struct DlStatus {
     #[wire(bits = 1)]
     pub pdi_operational: bool,

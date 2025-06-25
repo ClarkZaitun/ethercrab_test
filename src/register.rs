@@ -164,6 +164,8 @@ pub enum RegisterAddress {
     ///
     /// NOTE: The spec defines this as a `UINT64`, however negative values are required sometimes
     /// and they work fine in practice, so I'm inclined to say this should actually be an `INT64`.
+    // 注意：规范将其定义为“UINT64”，但有时需要负值并且它们在实践中工作良好，所以我倾向于说这实际上应该是“INT64”。
+    // 待考证
     DcSystemTimeOffset = 0x0920,
     /// Transmission delay, `u32`.
     ///
@@ -209,6 +211,7 @@ pub enum RegisterAddress {
     DcSync1CycleTime = 0x09A4,
 }
 
+//实现了一个从 RegisterAddress 枚举到 u16 类型的转换 trait (From trait)
 impl From<RegisterAddress> for u16 {
     fn from(reg: RegisterAddress) -> Self {
         reg as u16
@@ -279,6 +282,7 @@ pub enum PortType {
     Mii = 0x03,
 }
 
+// ESC功能支持寄存器 (0x0008:0x0009)
 /// Features supported by a SubDevice.
 ///
 /// Described in ETG1000.4 Table 31 - DL information.
@@ -315,8 +319,10 @@ pub struct SupportFlags {
     /// This parameter shall indicate that enhanced DC Sync Activation is available.
     ///
     /// ETG1000.4 Table 31 – DL information / ETG1000.4 page 49.
+    // 为0则不支持DC SYNC模式？
     #[wire(bits = 1)]
     pub enhanced_dc_sync: bool,
+    // 和EEPROM中作用一致？标识是否支持LRW命令
     #[wire(bits = 1)]
     pub lrw_not_supported: bool,
     #[wire(bits = 1)]
@@ -326,10 +332,12 @@ pub struct SupportFlags {
 }
 
 impl SupportFlags {
+    //
     pub fn dc_support(&self) -> DcSupport {
         if !self.dc_supported {
             DcSupport::None
         } else if !self.enhanced_dc_sync {
+            // 此判断依据存疑
             DcSupport::RefOnly
         } else if self.has_64bit_dc {
             DcSupport::Bits64
@@ -364,6 +372,7 @@ impl core::fmt::Display for SupportFlags {
     }
 }
 
+// 时钟支持
 /// SubDevice DC support status.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -372,6 +381,7 @@ pub enum DcSupport {
     #[default]
     None,
     /// This device can be used as the DC reference, but cannot be configured for `SYNC`/`LATCH`.
+    // 出处来自哪里？是否能激活SYNC信号和是否只能作为参考时钟无关。理论上DC模式都可以跑
     RefOnly,
     /// 64 bit time support.
     Bits64,

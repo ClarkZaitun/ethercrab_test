@@ -146,6 +146,8 @@ pub fn generate_struct_read(parsed: &StructMeta, input: &DeriveInput) -> proc_ma
 
     quote! {
         impl ::ethercrab_wire::EtherCrabWireRead for #name {
+            // 接收一个字节切片 buf 作为参数，尝试把切片里的数据反序列化为 Self 类型（即结构体实例），返回 Result 类型，成功时返回结构体实例，失败时返回 ::ethercrab_wire::WireError 类型的错误
+            // 实现类似C的字节流强制转换为结构体
             fn unpack_from_slice(buf: &[u8]) -> Result<Self, ::ethercrab_wire::WireError> {
                 let buf = buf.get(0..#size_bytes).ok_or(::ethercrab_wire::WireError::ReadBufferTooShort)?;
 
@@ -157,16 +159,22 @@ pub fn generate_struct_read(parsed: &StructMeta, input: &DeriveInput) -> proc_ma
     }
 }
 
+// 生成实现 ::ethercrab_wire::EtherCrabWireSized trait 的代码
+// parsed: &StructMeta：StructMeta 类型的引用，包含结构体的解析元数据。
+// input: &DeriveInput：DeriveInput 类型的引用，代表 #[derive] 属性的输入信息。
+// 返回值类型为 proc_macro2::TokenStream，即生成的代码片段的标记流。
 pub fn generate_sized_impl(parsed: &StructMeta, input: &DeriveInput) -> proc_macro2::TokenStream {
     let name = input.ident.clone();
     let size_bytes = parsed.width_bits.div_ceil(8);
 
-    quote! {
-        impl ::ethercrab_wire::EtherCrabWireSized for #name {
-            const PACKED_LEN: usize = #size_bytes;
+    // 生成代码
+    quote! { // quote 库提供的宏，用于生成 Rust 代码
+        impl ::ethercrab_wire::EtherCrabWireSized for #name {//# 是 quote 宏特有的语法，用于把 Rust 变量嵌入到生成的代码片段中
+            const PACKED_LEN: usize = #size_bytes; // 给实现 EtherCrabWireSized trait 的类型设置PACKED_LEN
 
-            type Buffer = [u8; #size_bytes];
+            type Buffer = [u8; #size_bytes]; //定义关联类型 Buffer，为长度为 size_bytes 的 u8 数组
 
+            // 返回一个全为 0 的 Buffer 类型数组，长度已经确定
             fn buffer() -> Self::Buffer {
                 [0u8; #size_bytes]
             }

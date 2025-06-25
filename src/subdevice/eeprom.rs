@@ -25,27 +25,37 @@ impl<P> SubDeviceEeprom<P>
 where
     P: EepromDataProvider,
 {
+    // 传入的 provider 类型实现了EepromDataProvider trait
     pub(crate) fn new(provider: P) -> Self {
         Self { provider }
     }
 
+    // 创建EEPROM 提供者的抽象，仅允许读取或写入特定范围字节
     /// Start a reader at the given address in words, returning at most `len` bytes.
     pub(crate) fn start_at(&self, word_addr: u16, len_bytes: u16) -> EepromRange<P> {
         EepromRange::new(self.provider.clone(), word_addr, len_bytes / 2)
     }
 
+    // 搜索给定category类别，如果找到该类别，返回EepromRange：匹配的category类型的数据区（字地址和长度）
     /// Search for a given category and return a reader over the bytes contained within the category
     /// if it is found.
     async fn category(&self, category: CategoryType) -> Result<Option<EepromRange<P>>, Error> {
         let mut reader = self.provider.clone();
 
+        // 第一个category的字地址 40 word
         let mut word_addr = SII_FIRST_CATEGORY_START;
 
+        // 空 category 的数量
         let mut num_empty_categories = 0u8;
 
         loop {
+            // 从EEPROM中读取4或8字节数据，此处获得2+2（header+size）字节数据就足够了
             let chunk = reader.read_chunk(word_addr).await?;
 
+            // 加2字,如果溢出返回None，退出循环
+            // 为什么加2？因为要跳过header+size占据的2字（4字节）的区域
+            // EEPROM的category字地址范围为多少？0x40~uint16的最大值
+            // ETG 2010规定地址的类型为16bit
             let Some(incr) = word_addr.checked_add(2) else {
                 fmt::warn!(
                     "Could not find EEPROM category {:?} or end marker. EEPROM could be empty or corrupt.",
@@ -55,13 +65,20 @@ where
                 break Ok(None);
             };
 
+            // 当前字地址指向数据区
             word_addr = incr;
 
+            // 从chunk中分离出前2字节成为c1
             let (c1, chunk) = fmt::unwrap_opt!(chunk.split_first_chunk::<2>());
+            // 从chunk剩余的2字节中分离出前2字节成为c2
             let (c2, _chunk) = fmt::unwrap_opt!(chunk.split_first_chunk::<2>());
 
+            // 获得category header，也就是category类型，Unsigned16
             let category_type = CategoryType::from(u16::from_le_bytes(*c1));
+            // 获得category的长度，单位为字，Unsigned16
             let len_words = u16::from_le_bytes(*c2);
+            // from_le_bytes 作用是把一个长度为 2 的小端字节序字节数组转换为 u16 类型的整数。
+            // 小端字节序指的是数据的低字节存于内存低地址，高字节存于内存高地址
 
             if len_words == 0 {
                 num_empty_categories += 1;
@@ -69,6 +86,7 @@ where
 
             // Heuristic: if every category we search for is empty, it's likely that the EEPROM is
             // blank and we should stop searching for anything.
+            // 32这个数字没有来源，随便定的
             if num_empty_categories >= 32 {
                 fmt::trace!(
                     "Did not find any non-empty categories. EEPROM could be empty or corrupt."
@@ -85,8 +103,12 @@ where
                 len_words
             );
 
+            // 判断当前找到的 EEPROM 类别是否为目标类别或者结束标记，从而决定是否终止循环并返回结果
             match category_type {
+                // cat 是在 match 表达式中使用带守卫（guard）的模式匹配时引入的变量。
+                // 在 Rust 的 match 表达式里，模式匹配可以附带一个条件判断，也就是守卫。这里的 cat 绑定了 category_type 的值，之后通过 if cat == category 这个条件来判断当前绑定的值是否等于目标类别 category。
                 cat if cat == category => {
+                    // 返回EepromRange：匹配的category类型的数据区（字地址和长度）
                     break Ok(Some(EepromRange::new(
                         self.provider.clone(),
                         word_addr,
@@ -97,6 +119,7 @@ where
                 _ => (),
             }
 
+            // 当前字地址跳过数据区，就到下一个category
             // Next category starts after the current category's data. This is a WORD address.
             word_addr += len_words;
         }
@@ -163,9 +186,13 @@ where
     /// Get the device name.
     ///
     /// This is the `OrderIdx` field as described in ETG2010 Table 7.
+    // 从EEPROM读取设备名称
+    // N是多大？
+    // 为什么设备名称是通过order_string_idx查找？
     pub(crate) async fn device_name<const N: usize>(
         &self,
     ) -> Result<Option<heapless::String<N>>, Error> {
+        // 从 EEPROM 中读取 General 类别信息，忽略 NoCategory 错误，若出现此错误则按无信息处理
         let Some(general) = self.general().await.ignore_no_category()? else {
             return Ok(None);
         };
@@ -176,9 +203,12 @@ where
         );
 
         Ok(self
+            // 在String区中查找指定索引的string.
             .find_string(general.order_string_idx)
             .await
+            // 将 Result<T, Error> 类型中可能出现的 Error::Eeprom(EepromError::NoCategory) 错误转换为 Ok(None)
             .ignore_no_category()?
+            // 获取Option内部some的值
             .flatten())
     }
 
@@ -224,28 +254,41 @@ where
         Ok(DefaultMailbox::unpack_from_slice(&buf)?)
     }
 
+    // 读取general Category
     pub(crate) async fn general(&self) -> Result<SiiGeneral, Error> {
+        // 获取general Category的EEPROM范围
         let mut reader = self
+            // 搜索给定category类别，如果找到该类别，返回EepromRange：匹配的category类型的数据区（字地址和长度）
             .category(CategoryType::General)
             .await?
             .ok_or(Error::Eeprom(EepromError::NoCategory))?;
 
+        // 获取字节切片，长度为general Category的长度
         let mut buf = SiiGeneral::buffer();
 
+        // 从EEPROM读取general Category
         reader.read_exact(&mut buf).await?;
 
+        // 反序列化
         Ok(SiiGeneral::unpack_from_slice(&buf)?)
     }
 
+    // 从EEPROM读取0x0008地址的标识信息
     pub(crate) async fn identity(&self) -> Result<SubDeviceIdentity, Error> {
-        let mut reader = self.start_at(0x0008, SubDeviceIdentity::PACKED_LEN as u16);
+        // 创建EEPROM 提供者的抽象，仅允许读取或写入特定范围字节
+        let mut reader = self.start_at(0x0008, SubDeviceIdentity::PACKED_LEN as u16); //长度16字节，8字
+        // 这里的0x0008地址应该设置为枚举或者常数，增强可读性
 
         fmt::trace!("Get identity");
 
+        // 返回一个全为 0 的 Buffer 类型数组，长度已经确定
         let mut buf = SubDeviceIdentity::buffer();
 
+        // 从 reader 读取指定数量的字节到提供的缓冲区，读取的字节数由缓冲区长度决定
+        // 这是 Read trait 里的异步方法，read_exact会调用read函数。实现Read trait时，就会实现read函数
         reader.read_exact(&mut buf).await?;
 
+        // 从buf中反序列化出SubDeviceIdentity结构体的值
         Ok(SubDeviceIdentity::unpack_from_slice(&buf)?)
     }
 
@@ -371,37 +414,49 @@ where
     /// different encoding. For example, some versions of the EL2262 use ISO-8859-1, resulting in
     /// non-ASCII _and_ non-UTF-8 strings. In this case, any non-ASCII characters are replaced with
     /// `'?'`by this method.
+    // 在String区中查找指定索引的string.
     pub(crate) async fn find_string<const N: usize>(
         &self,
         search_index: u8,
     ) -> Result<Option<heapless::String<N>>, Error> {
         fmt::trace!("Get string, index {}", search_index);
 
+        // EtherCAT 中的零索引表示空字符串
         // An index of zero in EtherCAT denotes an empty string.
         if search_index == 0 {
             return Ok(None);
         }
 
+        // 将基于 1 的 EtherCAT 字符串索引转换为基于 0 的正常索引。
+        // 字符串索引从 1 开始，字符串索引 0 用于表示分配空字符串或默认字符串。
         // Turn 1-based EtherCAT string indexing into normal 0-based.
         let search_index = search_index - 1;
 
+        // 搜索给定category类别，如果找到该类别，返回EepromRange：匹配的category类型的数据区（字地址和长度）
         if let Some(mut reader) = self.category(CategoryType::Strings).await? {
+            // 读取字符串数量
+            // 从读取器中异步读取一个字节，String区的第一个字节含义为String数量
             let num_strings = reader.read_byte().await?;
 
             fmt::trace!("--> SubDevice has {} strings", num_strings);
 
+            // 检查搜索索引是否越界
             if search_index > num_strings {
-                return Ok(None);
+                return Ok(None); // 要查找的字符串不存在，返回 Ok(None)
             }
 
+            // 通过循环跳过搜索索引之前的所有字符串
             for i in 0..search_index {
+                // 每个String的长度用一个字节保存
                 let string_len = reader.read_byte().await?;
 
                 fmt::trace!("String index {} has len {}", i, string_len);
 
+                // 跳过当前长度
                 reader.skip_ahead_bytes(string_len.into())?;
             }
 
+            // 读取目标字符串长度
             let string_len = usize::from(reader.read_byte().await?);
 
             if string_len > N {
@@ -411,15 +466,18 @@ where
                 });
             }
 
+            // 创建一个容量为 N 的 heapless::Vec 作为缓冲区
             let mut buf = heapless::Vec::<u8, N>::new();
 
             // SAFETY: We MUST ensure that `string_len` is less than `N`
             unsafe { buf.set_len(string_len) }
 
+            //
             reader.read_exact(&mut buf).await?;
 
             fmt::trace!("--> Raw string bytes {:?}", buf);
 
+            // 移除缓冲区中的所有 C 风格空字符（\0）
             // Get rid of any C null terminators
             buf.retain(|char| *char != 0x00);
 
@@ -427,6 +485,7 @@ where
             // non-ASCII characters. For example, the EL2262 contains the character `0xb5` which is
             // 'μ' in ISO-8859-1. We'll convert any characters that aren't ascii into question
             // marks.
+            // 遍历缓冲区中的每个字节，将非 ASCII 字符替换为问号（?）
             buf.iter_mut().for_each(|c| {
                 if !c.is_ascii() {
                     *c = b'?'

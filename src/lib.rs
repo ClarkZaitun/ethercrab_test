@@ -202,7 +202,7 @@ pub use subdevice_group::{GroupId, SubDeviceGroup, SubDeviceGroupHandle, TxRxRes
 pub use subdevice_state::SubDeviceState;
 pub use timer_factory::Timeouts;
 
-const LEN_MASK: u16 = 0b0000_0111_1111_1111;
+const LEN_MASK: u16 = 0b0000_0111_1111_1111; // EtherCAT帧长度为11bit
 const ETHERCAT_ETHERTYPE: u16 = 0x88a4;
 const MAINDEVICE_ADDR: EthernetAddress = EthernetAddress([0x10, 0x10, 0x10, 0x10, 0x10, 0x10]);
 

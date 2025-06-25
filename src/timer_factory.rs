@@ -6,6 +6,7 @@ pub(crate) type Timer = embassy_time::Timer;
 #[cfg(all(not(miri), feature = "std"))]
 pub(crate) type Timer = async_io::Timer;
 #[cfg(miri)]
+//在 Miri 环境下，把 Timer 类型别名为一个永远不会完成的 Future，以此模拟定时器操作，确保代码在 Miri 内存安全检查时能正常运行。
 pub(crate) type Timer = core::future::Pending<()>;
 
 #[cfg(not(feature = "std"))]
@@ -20,6 +21,7 @@ pub(crate) fn timer(duration: Duration) -> Timer {
     async_io::Timer::after(duration)
 }
 
+// 创建一个定时器
 #[cfg(miri)]
 pub(crate) fn timer(_duration: Duration) -> Timer {
     core::future::pending()
@@ -33,6 +35,7 @@ impl<T, O> IntoTimeout<O> for T
 where
     T: Future<Output = Result<O, Error>>,
 {
+    // 将原始 Future (self) 包装成一个带超时的 TimeoutFuture
     fn timeout(self, timeout: Duration) -> TimeoutFuture<impl Future<Output = Result<O, Error>>> {
         TimeoutFuture {
             f: self,
@@ -56,6 +59,7 @@ where
 {
     type Output = Result<O, Error>;
 
+    //
     fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<Self::Output> {
         let this = unsafe { self.get_unchecked_mut() };
         let timeout = unsafe { Pin::new_unchecked(&mut this.timeout) };
@@ -79,8 +83,10 @@ where
 }
 
 /// Timeout configuration for the EtherCrab master.
+//用于配置不同操作的超时时间。这个部分应该改为保留默认值，可由ENI提供，或由用户自行配置。
 #[derive(Copy, Clone, Debug)]
 pub struct Timeouts {
+    // 不同状态的切换超时时间不同，所以这里设计不完美。只能取最大值
     /// How long to wait for a SubDevice state change, e.g. SAFE-OP to OP.
     ///
     /// This timeout is global for all state transitions.
@@ -98,9 +104,12 @@ pub struct Timeouts {
     /// This duration specifies the wait time between polls.
     ///
     /// This defaults to a timeout of 0 to keep latency to a minimum.
+    // 某些操作需要反复从子设备读取数据，直到值发生变化。
+    // 这个值指定轮询之间的等待时间。
     pub wait_loop_delay: Duration,
 
     /// How long to wait for a SubDevice mailbox to become ready.
+    //等待从站邮箱准备好超时时间
     pub mailbox_echo: Duration,
 
     /// How long to wait for a response to be read from the SubDevice's response mailbox.
@@ -110,9 +119,9 @@ pub struct Timeouts {
 impl Timeouts {
     pub(crate) async fn loop_tick(&self) {
         #[cfg(not(miri))]
-        timer(self.wait_loop_delay).await;
+        timer(self.wait_loop_delay).await; // 异步等待指定时间(timer(self.wait_loop_delay).await)
         #[cfg(miri)]
-        std::thread::yield_now();
+        std::thread::yield_now(); // 休眠
     }
 }
 

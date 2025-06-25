@@ -63,17 +63,21 @@ impl defmt::Format for EthernetAddress {
 /// A read/write wrapper around an Ethernet II frame buffer.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+//<T: AsRef<[u8]>>：这是泛型参数声明。T 是一个泛型类型，它必须实现 AsRef<[u8]> trait。
+//AsRef<[u8]> 意味着 T 类型的值可以通过 as_ref 方法转换为 &[u8] 类型的字节切片引用，这样就能方便地访问字节数据。常见实现 AsRef<[u8]> 的类型有 Vec<u8>、&[u8] 等。
 pub struct EthernetFrame<T: AsRef<[u8]>> {
     buffer: T,
 }
 
 mod field {
+    //Range 表示一个包含起始值但不包含结束值的区间，语法为 start..end。
+    //RangeFrom 表示一个从起始值开始直到无穷大的区间，语法为 start..。
     use core::ops::{Range, RangeFrom};
 
     pub const DESTINATION: Range<usize> = 0..6;
-    pub const SOURCE: Range<usize> = 6..12;
+    pub const SOURCE: Range<usize> = 6..12; //常量，其值为 6..12
     pub const ETHERTYPE: Range<usize> = 12..14;
-    pub const PAYLOAD: RangeFrom<usize> = 14..;
+    pub const PAYLOAD: RangeFrom<usize> = 14..; // 以太网帧头之后的数据
 }
 
 /// The Ethernet header length
@@ -81,6 +85,7 @@ pub const ETHERNET_HEADER_LEN: usize = field::PAYLOAD.start; //14
 
 impl<T: AsRef<[u8]>> EthernetFrame<T> {
     /// Imbue a raw octet buffer with Ethernet frame structure.
+    //const：意味着该函数是一个常量函数，在编译时就能被执行，可用于初始化常量
     pub const fn new_unchecked(buffer: T) -> EthernetFrame<T> {
         EthernetFrame { buffer }
     }
@@ -113,7 +118,7 @@ impl<T: AsRef<[u8]>> EthernetFrame<T> {
 
     /// Return the length of a frame header.
     pub const fn header_len() -> usize {
-        ETHERNET_HEADER_LEN
+        ETHERNET_HEADER_LEN //14
     }
 
     /// Return the length of a buffer required to hold a packet with the payload
@@ -133,24 +138,29 @@ impl<T: AsRef<[u8]>> EthernetFrame<T> {
     #[inline]
     pub fn src_addr(&self) -> EthernetAddress {
         let data = self.buffer.as_ref();
+        //&data[field::SOURCE]：从 data 字节切片中提取源 MAC 地址对应的字节数据
+        //from_bytes 将提取的字节数据转换为 EthernetAddress 实例
         EthernetAddress::from_bytes(&data[field::SOURCE])
     }
 
     /// Return the EtherType field, without checking for 802.1Q.
-    #[inline]
+    #[inline] //提示编译器在调用该方法时将其代码内联展开，减少函数调用开销，提升性能​
     pub fn ethertype(&self) -> u16 {
         let data = self.buffer.as_ref();
 
         // Ethernet is big-endian
         data.get(field::ETHERTYPE)
+            //将 &[u8] 类型的 res 转换为长度为 2 的 [u8; 2] 数组，u16::from_be_bytes 方法将这个数组按大端字节序转换为 u16 类型的值
             .map(|res| u16::from_be_bytes(res.try_into().unwrap()))
             // EtherCrab only really cares whether the ethertype is 0x88a4, so defaulting to zero on
             // unparseable ethertypes is fine here (imo, lol)
+            //由于 EtherCrab 主要关注 EtherType 是否为 0x88a4，所以在无法解析 EtherType 字段时，将默认值设为 0 是可行的
             .unwrap_or(0)
     }
 }
 
 impl<'a, T: AsRef<[u8]> + ?Sized> EthernetFrame<&'a T> {
+    // 返回以太网帧头之后的数据区域指针
     /// Return a pointer to the payload, without checking for 802.1Q.
     #[inline]
     pub fn payload(&self) -> &'a [u8] {

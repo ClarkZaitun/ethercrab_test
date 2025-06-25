@@ -39,15 +39,20 @@ impl<'sto> ReceivedFrame<'sto> {
         f
     }
 
+    // 从返回的帧中获取数据报的报头和WKC，没有检查WKC是否正确
     pub fn first_pdu(self, handle: PduResponseHandle) -> Result<ReceivedPdu<'sto>, Error> {
+        // 从返回的帧中获取EtherCAT 数据报的字节切片
         let buf = self.inner.pdu_buf();
 
+        // 解析数据报头
         let pdu_header = PduHeader::unpack_from_slice(buf)?;
 
+        // 获得数据报数据长度
         let payload_len = usize::from(pdu_header.flags.len());
 
         // If buffer isn't long enough to hold payload and WKC, this is probably a corrupt PDU or
         // someone is committing epic haxx.
+        // 这里不是应该 10 + payload_len + 2 ？
         if buf.len() < payload_len + 2 {
             return Err(Error::Pdu(PduError::TooLong));
         }
@@ -60,6 +65,7 @@ impl<'sto> ReceivedFrame<'sto> {
             return Err(Error::Pdu(PduError::InvalidIndex(pdu_header.index)));
         }
 
+        // 安全地获取指向数据报数据的非空指针
         let payload_ptr = unsafe {
             NonNull::new_unchecked(
                 buf.get(PduHeader::PACKED_LEN..)
@@ -69,6 +75,7 @@ impl<'sto> ReceivedFrame<'sto> {
             )
         };
 
+        // 安全地获取指向数据报WKC的非空指针
         let working_counter = u16::unpack_from_slice(
             buf.get((PduHeader::PACKED_LEN + payload_len)..)
                 .ok_or(Error::Internal)?,
@@ -233,7 +240,7 @@ pub struct ReceivedPdu<'sto> {
     data_start: NonNull<u8>,
     len: usize,
     pub(crate) working_counter: u16,
-    _storage: PhantomData<&'sto ()>,
+    _storage: PhantomData<&'sto ()>, // 明确表示这个结构体依赖于外部数据的生命周期 'sto
 }
 
 impl ReceivedPdu<'_> {
@@ -247,6 +254,7 @@ impl ReceivedPdu<'_> {
         self.data_start = unsafe { NonNull::new_unchecked(self.data_start.as_ptr().add(ct)) };
     }
 
+    // 验证工作计数器(Working Counter, WKC)的值是否符合预期
     pub fn wkc(self, expected: u16) -> Result<Self, Error> {
         if self.working_counter == expected {
             Ok(self)
@@ -258,6 +266,7 @@ impl ReceivedPdu<'_> {
         }
     }
 
+    // 有WKC预期值时检查WKC是否符合预期，否则直接返回WKC
     pub fn maybe_wkc(self, expected: Option<u16>) -> Result<Self, Error> {
         match expected {
             Some(expected) => self.wkc(expected),

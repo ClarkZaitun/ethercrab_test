@@ -2,14 +2,15 @@
 //!
 //! Like cookie_factory but much simpler and will **quite happily panic**.
 
+// 打包类型并将它写入buff的开头，返回剩余未使用的buff（字节切片）
 /// Write a packed struct into the slice.
 pub fn write_packed<T>(value: T, buf: &mut [u8]) -> &mut [u8]
 where
     T: ethercrab_wire::EtherCrabWireWrite,
 {
-    value.pack_to_slice_unchecked(buf);
+    value.pack_to_slice_unchecked(buf); // 打包value并将它写入buff的开头
 
-    &mut buf[value.packed_len()..]
+    &mut buf[value.packed_len()..] // 返回剩余未使用的buff（字节切片）
 }
 
 #[cfg(test)]

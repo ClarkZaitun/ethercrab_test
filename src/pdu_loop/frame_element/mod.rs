@@ -22,6 +22,7 @@ pub const FIRST_PDU_EMPTY: u16 = 0xff00;
 /// Frame state.
 #[atomic_enum::atomic_enum]
 #[derive(PartialEq, Default)]
+//用于自动为类型实现 PartialEq trait。实现该 trait 后，类型的实例就能使用 == 和 != 操作符进行相等性比较。
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum FrameState {
     // SAFETY: Because we create a bunch of `Frame`s with `MaybeUninit::zeroed`, the `None` state
@@ -71,13 +72,17 @@ pub enum FrameState {
 //    FrameState::RxProcessing -->|"Calling code is done with frame\nReceivedFrame::drop()"| FrameState::None
 //    ```
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C)] // 保证 FrameElement 结构体的内存布局遵循 C 语言的规则，确保在进行指针操作和与 C 代码交互时内存布局的一致性。
+// 帧
 pub struct FrameElement<const N: usize> {
+    // 缓冲区的帧索引
     /// Ethernet frame index in storage. Has nothing to do with PDU header index field.
     storage_slot_index: u8,
+    // 帧状态
     status: AtomicFrameState,
     waker: AtomicWaker,
 
+    // 跟踪EtherCAT帧数据区已存在的数据报的总长度
     /// Keeps track of how much of the PDU data buffer has been consumed.
     pdu_payload_len: usize,
 
@@ -89,13 +94,16 @@ pub struct FrameElement<const N: usize> {
     ///
     /// The lower byte stores the PDU index, the upper byte stores a sentinel used to signify
     /// whether the PDU has been set or not.
-    first_pdu: AtomicU16,
+    first_pdu: AtomicU16, //该帧的第一个数据报的索引
+    // 低字节存储 PDU 索引，高字节存储哨兵值，用于标记 PDU 索引是否已设置。在接收帧时，会遍历所有 FrameElement 实例并读取该字段。
 
     // MUST be the last element otherwise pointer arithmetic doesn't work for
     // `NonNull<FrameElement<0>>`.
-    ethernet_frame: [u8; N],
+    ethernet_frame: [u8; N], //必须作为结构体的最后一个字段，否则 NonNull<FrameElement<0>> 的指针算术操作会出错。
 }
 
+// 为 FrameElement<N> 实现 Default trait（生成默认值）
+// 何时调用FrameElement::default()？
 impl<const N: usize> Default for FrameElement<N> {
     fn default() -> Self {
         Self {
@@ -109,9 +117,9 @@ impl<const N: usize> Default for FrameElement<N> {
     }
 }
 
+// 为 FrameElement<N> 定义自身的关联函数/方法（如状态操作、指针获取等）
 impl<const N: usize> FrameElement<N> {
-    /// Get pointer to entire data: the Ethernet frame including header and all subsequent EtherCAT
-    /// payload.
+    /// 获取指向整个以太网帧数据的指针
     unsafe fn ptr(this: NonNull<FrameElement<N>>) -> NonNull<u8> {
         let buf_ptr: *mut [u8; N] = unsafe { addr_of_mut!((*this.as_ptr()).ethernet_frame) };
         let buf_ptr: *mut u8 = buf_ptr.cast();
@@ -119,24 +127,31 @@ impl<const N: usize> FrameElement<N> {
         unsafe { NonNull::new_unchecked(buf_ptr) }
     }
 
+    // 获取指向 EtherCAT 数据报的指针
     /// Get pointer to EtherCAT frame payload. i.e. the buffer after the end of the EtherCAT frame
     /// header where all the PDUs (header and data) go.
     unsafe fn ethercat_payload_ptr(this: NonNull<FrameElement<N>>) -> NonNull<u8> {
         unsafe {
             Self::ptr(this)
-                .byte_add(EthernetFrame::<&[u8]>::header_len())
-                .byte_add(EthercatFrameHeader::header_len())
-                .cast()
+                .byte_add(EthernetFrame::<&[u8]>::header_len()) //偏移以太网帧头
+                .byte_add(EthercatFrameHeader::header_len()) //偏移EtherCAT帧头
+                .cast() //由于 byte_add 操作后指针类型为 NonNull<u8>，调用 cast 方法确保返回的指针类型符合方法的预期
         }
     }
 
+    // 设置帧状态
+    // 无返回值，原子写入一定不会失败吗？
     /// Set the frame's state without checking its current state.
     pub(in crate::pdu_loop) unsafe fn set_state(this: NonNull<FrameElement<N>>, state: FrameState) {
-        let fptr = this.as_ptr();
+        let fptr = this.as_ptr(); // 转换为原始裸指针 *mut FrameElement<N>
 
+        // 使用 addr_of_mut! 宏获取 status 字段的可变引用，避免潜在的未定义行为
+        // addr_of_mut! 宏保证只获取成员的地址，不会实际访问该成员
         unsafe { (*addr_of_mut!((*fptr).status)).store(state, Ordering::Release) };
+        // Ordering::Release 是内存顺序，它确保在存储操作之前的所有写操作不会被重排到存储操作之后，保证其他线程在看到新状态时，也能看到之前的写操作结果
     }
 
+    //通过原子性的比较并交换操作，确保在多线程环境下安全地将帧的状态从 from 切换到 to。如果帧当前状态与 from 不匹配，操作会失败并返回实际状态；如果匹配，则成功切换状态并返回原始指针
     /// Atomically swap the frame state from `from` to `to`.
     ///
     /// If the frame is not currently in the given `from` state, this method will return an error
@@ -146,20 +161,23 @@ impl<const N: usize> FrameElement<N> {
         from: FrameState,
         to: FrameState,
     ) -> Result<NonNull<FrameElement<N>>, FrameState> {
-        let fptr = this.as_ptr();
+        let fptr = this.as_ptr(); //将 NonNull<FrameElement<N>> 类型的 this 转换为原始裸指针 *mut FrameElement<N>
 
         unsafe {
+            // 使用 addr_of_mut! 宏获取 status 字段的可变引用，避免潜在的未定义行为
+            // compare_exchange 交换前，当前值必须是期望值，才会交换
             (*addr_of_mut!((*fptr).status)).compare_exchange(
                 from,
                 to,
-                Ordering::AcqRel,
-                Ordering::Relaxed,
+                Ordering::AcqRel, //成功时的内存顺序，具有获取和释放语义。获取语义确保在交换操作之后的所有读操作不会被重排到交换操作之前；释放语义确保在交换操作之前的所有写操作不会被重排到交换操作之后
+                Ordering::Relaxed, //失败时的内存顺序，只保证操作的原子性，不提供任何跨线程的内存同步保证
             )
-        }?;
+        }?; //如果 compare_exchange 操作失败，方法会提前返回 Err，错误值为帧当前实际的状态
 
         Ok(this)
     }
 
+    //原子性地将帧缓冲区一个帧从"未使用"状态(None)切换到"已创建"状态(Created)
     /// Attempt to clame a frame element as CREATED. Succeeds if the selected FrameElement is
     /// currently in the NONE state.
     unsafe fn claim_created(
@@ -192,10 +210,13 @@ impl<const N: usize> FrameElement<N> {
         Ok(this)
     }
 
+    //借助 swap_state 方法原子性地尝试将帧的状态从可发送切换到正在发送。若切换成功，返回包含原始指针的 Some；若失败，返回 None
     unsafe fn claim_sending(this: NonNull<FrameElement<N>>) -> Option<NonNull<FrameElement<N>>> {
         unsafe { Self::swap_state(this, FrameState::Sendable, FrameState::Sending) }.ok()
+        //.ok()：Result 类型的方法，作用是将 Result 转换为 Option。若 Result 是 Ok，则返回 Some，并将 Ok 中的值提取出来；若 Result 是 Err，则返回 None。
     }
 
+    //尝试将一个处于 Sent 状态的帧标记为 RxBusy 状态，即声明该帧开始接收响应数据
     unsafe fn claim_receiving(this: NonNull<FrameElement<N>>) -> Option<NonNull<FrameElement<N>>> {
         unsafe { Self::swap_state(this, FrameState::Sent, FrameState::RxBusy) }
             .map_err(|actual_state| {
@@ -213,6 +234,7 @@ impl<const N: usize> FrameElement<N> {
         unsafe { *addr_of!((*this.as_ptr()).storage_slot_index) }
     }
 
+    //检查当前帧的首个 PDU 索引是否与 search 相等
     pub(in crate::pdu_loop) unsafe fn first_pdu_is(
         this: NonNull<FrameElement<0>>,
         search: u8,
@@ -221,9 +243,12 @@ impl<const N: usize> FrameElement<N> {
 
         // Unused sentinel value occupies upper byte, so this equality will never hold for empty
         // frames
+        //由于 first_pdu 的高字节是未使用的哨兵值，对于空帧，该等式永远不成立，因为空帧的 first_pdu 值为 FIRST_PDU_EMPTY
         u16::from(search) == raw
     }
 
+    // 原子地设置（如果还没设置）帧中第一个数据报的index，通过替换FIRST_PDU_EMPTY为u8的index实现
+    // 这里需要注意内存顺序。保证前面的数据已经写入
     /// If no PDUs are present in the frame, set the first PDU index to the given value.
     unsafe fn set_first_pdu(this: NonNull<FrameElement<0>>, value: u8) {
         let first_pdu = unsafe { &mut *addr_of_mut!((*this.as_ptr()).first_pdu) };
@@ -234,8 +259,8 @@ impl<const N: usize> FrameElement<N> {
         let _ = first_pdu.compare_exchange(
             FIRST_PDU_EMPTY,
             u16::from(value),
-            Ordering::Release,
-            Ordering::Relaxed,
+            Ordering::Release, //确保在成功交换后，之前的写操作不会被重排到交换之后
+            Ordering::Relaxed, //失败时不提供任何内存顺序保证
         );
     }
 

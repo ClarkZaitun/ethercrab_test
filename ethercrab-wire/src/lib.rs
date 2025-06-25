@@ -28,15 +28,21 @@ mod impls;
 pub use error::WireError;
 pub use ethercrab_wire_derive::{EtherCrabWireRead, EtherCrabWireReadWrite, EtherCrabWireWrite};
 
+// 可反序列化，编译时已知大小
 /// A type to be received from the wire, according to EtherCAT spec rules (packed bits, little
 /// endian).
 ///
 /// This trait is [derivable](https://docs.rs/ethercrab-wire-derive).
 pub trait EtherCrabWireRead: Sized {
+    // Sized 是一个空特质，即标记特质。它不定义任何方法，仅用于标记类型在编译时具有已知的大小。
+    //所有在编译时能确定大小的类型，如 i32、struct、enum 等，都会自动实现 Sized 特质；而像切片 [T]、动态大小的特质对象 dyn Trait 等类型则不会实现 Sized 特质。
+
+    // 反序列化：从字节缓冲区解析数据
     /// Unpack this type from the beginning of the given buffer.
     fn unpack_from_slice(buf: &[u8]) -> Result<Self, WireError>;
 }
 
+// 可序列化
 /// A type to be sent/received on the wire, according to EtherCAT spec rules (packed bits, little
 /// endian).
 ///
@@ -53,6 +59,7 @@ pub trait EtherCrabWireWrite {
         Ok(self.pack_to_slice_unchecked(buf))
     }
 
+    // 打包类型并将它写入buff的开头
     /// Pack the type and write it into the beginning of `buf`.
     ///
     /// # Panics
@@ -71,6 +78,7 @@ pub trait EtherCrabWireReadWrite: EtherCrabWireRead + EtherCrabWireWrite {}
 
 impl<T> EtherCrabWireReadWrite for T where T: EtherCrabWireRead + EtherCrabWireWrite {}
 
+// 编译时已知大小
 /// Implemented for types with a known size at compile time.
 ///
 /// This trait is implemented automatically if [`EtherCrabWireRead`], [`EtherCrabWireWrite`] or

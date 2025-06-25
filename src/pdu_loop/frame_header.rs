@@ -4,14 +4,14 @@ use crate::LEN_MASK;
 use ethercrab_wire::{EtherCrabWireRead, EtherCrabWireSized, EtherCrabWireWrite};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, ethercrab_wire::EtherCrabWireRead)]
-#[repr(u8)]
+#[repr(u8)] //指定枚举或结构体的底层表示形式
 pub(crate) enum ProtocolType {
-    DlPdu = 0x01u8,
-    // Not currently supported.
-    // NetworkVariables = 0x04,
-    // Mailbox = 0x05,
-    // #[wire(catch_all)]
-    // Unknown(u8),
+    DlPdu = 0x01u8, //therCAT设备通信
+                    // Not currently supported.
+                    // NetworkVariables = 0x04,//EAP过程数据通信
+                    // Mailbox = 0x05,//EAP邮箱通信
+                    // #[wire(catch_all)]
+                    // Unknown(u8),
 }
 
 /// An EtherCAT frame header.
@@ -19,9 +19,10 @@ pub(crate) enum ProtocolType {
 /// An EtherCAT frame can contain one or more PDUs after this header, each starting with a
 /// [`PduHeader`](crate::pdu_loop::pdu_header).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+//实现 Hash trait 允许将该结构体实例用作 HashMap 或 HashSet 的键
 pub struct EthercatFrameHeader {
-    pub(crate) payload_len: u16,
-    pub(crate) protocol: ProtocolType,
+    pub(crate) payload_len: u16,       //EtherCAT帧数据区长度
+    pub(crate) protocol: ProtocolType, //EtherCAT帧协议
 }
 
 impl EtherCrabWireSized for EthercatFrameHeader {
@@ -35,18 +36,22 @@ impl EtherCrabWireSized for EthercatFrameHeader {
 }
 
 impl EtherCrabWireRead for EthercatFrameHeader {
+    //将 u16 的数据展开为一个 u16 和 u8，获得EtherCAT帧数据区长度
     fn unpack_from_slice(buf: &[u8]) -> Result<Self, ethercrab_wire::WireError> {
-        let raw = u16::unpack_from_slice(buf)?;
+        //调用 u16 类型的 unpack_from_slice 方法，尝试从传入的字节切片 buf 中解析出一个 u16 类型的值
+        let raw = u16::unpack_from_slice(buf)?; //ethercrab-wire对基本类型实现 unpack_from_slice，这里可能返回 WireError
 
         Ok(Self {
             payload_len: raw & LEN_MASK,
-            protocol: ProtocolType::try_from((raw >> 12) as u8)?,
+            protocol: ProtocolType::try_from((raw >> 12) as u8)?, //EtherCAT帧类型为4bit
         })
     }
 }
 
 impl EtherCrabWireWrite for EthercatFrameHeader {
+    // 压缩数据长度和协议到2字节的EtherCAT帧头中，将EtherCAT帧头写入帧中
     fn pack_to_slice_unchecked<'buf>(&self, buf: &'buf mut [u8]) -> &'buf [u8] {
+        // 压缩数据长度和协议到2字节的EtherCAT帧头中
         // Protocol in last 4 bits
         let raw = self.payload_len | (self.protocol as u16) << 12;
 
@@ -54,15 +59,16 @@ impl EtherCrabWireWrite for EthercatFrameHeader {
     }
 
     fn packed_len(&self) -> usize {
-        Self::PACKED_LEN
+        Self::PACKED_LEN //2
     }
 }
 
 impl EthercatFrameHeader {
+    // 创建EtherCAT帧头
     /// Create a new PDU frame header.
     pub fn pdu(len: u16) -> Self {
         debug_assert!(
-            len <= LEN_MASK,
+            len <= LEN_MASK, // 应该改为1498或1470
             "Frame length may not exceed {} bytes",
             LEN_MASK
         );

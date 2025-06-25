@@ -46,6 +46,9 @@ pub struct MainDevice<'sto> {
     pub(crate) config: MainDeviceConfig,
 }
 
+// 为 MainDevice<'_> 类型手动实现 Sync trait。
+// 多数情况下，Rust 会依据类型的字段自动推断该类型是否实现 Sync。例如，若一个结构体的所有字段都实现了 Sync，那么这个结构体也会自动实现 Sync。不过，在某些特殊情形下，需要手动实现 Sync trait，特别是当类型包含一些 unsafe 代码或者特殊的内存管理逻辑时。
+// 对于 MainDevice<'_> 类型，由于它包含了一个 PduLoop<'sto> 字段，这个字段可能包含了一些 unsafe 代码或者特殊的内存管理逻辑，因此需要手动实现 Sync trait。
 unsafe impl Sync for MainDevice<'_> {}
 
 impl<'sto> MainDevice<'sto> {
@@ -64,11 +67,13 @@ impl<'sto> MainDevice<'sto> {
         }
     }
 
+    // BWR 数据全为0的数据报，不检查返回帧WKC是否正确
     /// Write zeroes to every SubDevice's memory in chunks.
     async fn blank_memory<const LEN: usize>(&self, start: impl Into<u16>) -> Result<(), Error> {
-        let start = start.into();
+        let start = start.into(); // 这个into在哪里实现的？
 
         self.pdu_loop
+            // BWR 数据全为0的数据报，不检查返回帧WKC是否正确
             .pdu_broadcast_zeros(
                 start,
                 LEN as u16,
@@ -80,22 +85,26 @@ impl<'sto> MainDevice<'sto> {
 
     // FIXME: When adding a powered on SubDevice to the network, something breaks. Maybe need to reset
     // the configured address? But this broke other stuff so idk...
+    // 重置的寄存器可能还不够，没有检查WKC
     async fn reset_subdevices(&self) -> Result<(), Error> {
         fmt::debug!("Beginning reset");
 
+        // BWR 0x0120
         // Reset SubDevices to init
         Command::bwr(RegisterAddress::AlControl.into())
-            .ignore_wkc()
+            .ignore_wkc() // 不应该忽略WKC
             .send(self, AlControl::reset())
             .await?;
 
+        // 没必要重置所有FMMU，浪费启动时间
         // Clear FMMUs - see ETG1000.4 Table 57
         // Some devices aren't able to blank the entire region so we loop through all offsets.
         for fmmu_idx in 0..16 {
-            self.blank_memory::<{ Fmmu::PACKED_LEN }>(RegisterAddress::fmmu(fmmu_idx))
+            self.blank_memory::<{ Fmmu::PACKED_LEN }>(RegisterAddress::fmmu(fmmu_idx)) //Fmmu::PACKED_LEN 16
                 .await?;
         }
 
+        // 没必要重置所有SM，浪费启动时间
         // Clear SMs - see ETG1000.4 Table 59
         // Some devices aren't able to blank the entire region so we loop through all offsets.
         for sm_idx in 0..16 {
@@ -103,6 +112,7 @@ impl<'sto> MainDevice<'sto> {
                 .await?;
         }
 
+        // 重置0x980、0x0910、0x0920、0x0928、0x092C、0x0981、0x0990、0x09A0、0x09A4
         // Set DC control back to EtherCAT
         self.blank_memory::<{ size_of::<u8>() }>(RegisterAddress::DcCyclicUnitControl)
             .await?;
@@ -129,10 +139,12 @@ impl<'sto> MainDevice<'sto> {
         //
         // According to ETG1020, we'll use the mode where the DC reference clock is adjusted to the
         // master clock.
+        // BWR 0x0934
         Command::bwr(RegisterAddress::DcControlLoopParam3.into())
             .ignore_wkc()
             .send(self, 0x0c00u16)
             .await?;
+        // BWR 0x0930
         // Must be after param 3 so DC control unit is reset
         Command::bwr(RegisterAddress::DcControlLoopParam1.into())
             .ignore_wkc()
@@ -144,6 +156,7 @@ impl<'sto> MainDevice<'sto> {
         Ok(())
     }
 
+    // 检测子设备，设置其配置的站地址，分配到组，从 EEPROM 配置子设备。
     /// Detect SubDevices, set their configured station addresses, assign to groups, configure
     /// SubDevices from EEPROM.
     ///
@@ -209,16 +222,24 @@ impl<'sto> MainDevice<'sto> {
     ///     .expect("Init");
     /// # };
     /// ```
+    // 检测网络上的从站设备数量
+    // 重置所有从站设备到初始状态
+    // 为每个从站设备分配配置地址
+    // 配置分布式时钟(DC)拓扑和同步
+    // 使用提供的 group_filter 闭包将设备分配到不同组
+    // 配置每个组的PDI(过程数据映像)偏移量
+    // 等待所有设备进入PRE-OP状态
     pub async fn init<const MAX_SUBDEVICES: usize, G>(
         &self,
         now: impl Fn() -> u64 + Copy,
         mut group_filter: impl for<'g> FnMut(
+            //group_filter：分组过滤器闭包，用于决定每个从站设备分配到哪个组
             &'g G,
             &SubDevice,
         ) -> Result<&'g dyn SubDeviceGroupHandle, Error>,
     ) -> Result<G, Error>
     where
-        G: Default,
+        G: Default, //表示分组容器类型的泛型参数，必须实现 Default trait
     {
         let groups = G::default();
 
@@ -236,18 +257,24 @@ impl<'sto> MainDevice<'sto> {
             return Ok(groups);
         }
 
+        // 初始化所有从站：请求init，重置寄存器
         self.reset_subdevices().await?;
 
         // This is the only place we store the number of SubDevices, so the ordering can be
         // pretty much anything.
         self.num_subdevices.store(num_subdevices, Ordering::Relaxed);
 
+        // 使用heapless库提供的双端队列实现
+        // 创建了一个固定容量的双端队列(deque)来存储从站设备(SubDevice)实例
         let mut subdevices = heapless::Deque::<SubDevice, MAX_SUBDEVICES>::new();
 
+        // 设置从站配置地址，确认从站在init状态；从EEPROM读取从站名称和标识信息；从寄存器读取ESC支持功能，地址别名，端口，创建从站
         // Set configured address for all discovered SubDevices
         for subdevice_idx in 0..num_subdevices {
+            // 配置地址从0x1000开始
             let configured_address = BASE_SUBDEVICE_ADDRESS.wrapping_add(subdevice_idx);
 
+            // APWR 0x0010 设置从站配置地址，没检查WKC
             Command::apwr(
                 subdevice_idx,
                 RegisterAddress::ConfiguredStationAddress.into(),
@@ -255,6 +282,7 @@ impl<'sto> MainDevice<'sto> {
             .send(self, configured_address)
             .await?;
 
+            // 确认从站在init状态；从EEPROM读取从站名称和标识信息；从寄存器读取ESC支持功能，地址别名，端口，创建从站
             let subdevice = SubDevice::new(self, subdevice_idx, configured_address).await?;
 
             subdevices
@@ -266,6 +294,7 @@ impl<'sto> MainDevice<'sto> {
 
         // Configure distributed clock offsets/propagation delays, perform static drift
         // compensation. We need the SubDevices in a single list so we can read the topology.
+        // 配置分布时钟偏移/传播延迟，执行静态漂移补偿。我们需要将子设备放在一个列表中，以便读取拓扑结构。
         let dc_master = dc::configure_dc(self, subdevices.as_mut_slices().0, now).await?;
 
         // If there are SubDevices that support distributed clocks, run static drift compensation
@@ -313,6 +342,7 @@ impl<'sto> MainDevice<'sto> {
         Ok(groups)
     }
 
+    //此方法将请求并等待所有子设备处于“PRE-OP”状态后再返回。
     /// A convenience method to allow the quicker creation of a single group containing all
     /// discovered SubDevices.
     ///
@@ -394,6 +424,7 @@ impl<'sto> MainDevice<'sto> {
     /// # Ok::<(), ethercrab::error::Error>(())
     /// # };
     /// ```
+    //快速创建一个包含所有已发现从站设备的单一组
     pub async fn init_single_group<const MAX_SUBDEVICES: usize, const MAX_PDI: usize>(
         &self,
         now: impl Fn() -> u64 + Copy,
@@ -402,10 +433,13 @@ impl<'sto> MainDevice<'sto> {
             .await
     }
 
+    // BRD 0x0000
     /// Count the number of SubDevices on the network.
     async fn count_subdevices(&self) -> Result<u16, Error> {
         Command::brd(RegisterAddress::Type.into())
-            .receive_wkc::<u8>(self)
+            //带有泛型参数的函数或结构体在使用时，当类型无法推断时，必须显式指定具体类型
+            .receive_wkc::<u8>(self) // 指定读取长度为 1 字节(u8)，对应 Type 寄存器的大小
+            // 必须指定 u8 因为返回值不携带类型信息
             .await
     }
 
@@ -479,6 +513,7 @@ impl<'sto> MainDevice<'sto> {
         self.pdu_loop.max_frame_data()
     }
 
+    // 发送一个只包含一个EtherCAT数据报的帧
     /// Send a single PDU in a frame.
     pub(crate) async fn single_pdu(
         &'sto self,
@@ -486,18 +521,26 @@ impl<'sto> MainDevice<'sto> {
         data: impl EtherCrabWireWrite,
         len_override: Option<u16>,
     ) -> Result<ReceivedPdu<'sto>, Error> {
+        // 从预分配的帧存储池中找到一个可用的帧，并将其标记为"已创建"状态，以便后续用于发送 PDU 数据
         let mut frame = self.pdu_loop.alloc_frame()?;
 
+        // 在帧中插入一个数据报，没有处理帧空间不足的情况。如果空间不足，就会失败
+        // 因为上文获取了新的帧，所以空间一定是足够的，如果不够，是数据报创建有问题。数据报的数据区应该检查总长度
         let handle = frame.push_pdu(command, data, len_override)?;
 
+        // 帧设置为可发送状态Sendable，返回一个 Future，当收到对已发送帧的响应时，该 Future 将被执行。
+        // 前文已经写入帧的数据报，以太网帧头，本函数会写入EtherCAT帧头，组帧完成。
         let frame = frame.mark_sendable(
             &self.pdu_loop,
             self.timeouts.pdu,
             self.config.retry_behaviour.retry_count(),
         );
 
+        // 唤醒Tx任务
         self.pdu_loop.wake_sender();
 
+        // 开始轮询 ReceiveFrameFut。成功后，帧状态为 RxProcessing
+        // 从返回的帧中获取数据报的报头和WKC，没有检查WKC是否正确
         frame.await?.first_pdu(handle)
     }
 

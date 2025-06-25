@@ -1,6 +1,7 @@
 //! Configuration passed to [`MainDevice`](crate::MainDevice).
 
 /// Configuration passed to [`MainDevice`](crate::MainDevice).
+// 主站的配置结构体。这里只保存DC相关配置。可以用于保存ENI信息
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct MainDeviceConfig {
     /// The number of `FRMW` packets to send during the static phase of Distributed Clocks (DC)
@@ -14,16 +15,17 @@ pub struct MainDeviceConfig {
     /// EtherCAT packet (PDU) network retry behaviour.
     pub retry_behaviour: RetryBehaviour,
 }
-
+// Default 是标准库 std::default 模块定义的一个 trait，其作用是为类型提供默认值。若某个类型实现了 Default trait，就能够借助 Default::default() 方法或者 T::default() 语法获取该类型的默认实例
 impl Default for MainDeviceConfig {
     fn default() -> Self {
         Self {
             dc_static_sync_iterations: 10_000,
-            retry_behaviour: RetryBehaviour::default(),
+            retry_behaviour: RetryBehaviour::default(), //默认值是RetryBehaviour::None
         }
     }
 }
 
+//这是个好设计
 /// Network communication retry policy.
 ///
 /// Retries will be performed at the rate defined by [`Timeouts::pdu`](crate::Timeouts::pdu).

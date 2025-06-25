@@ -1,22 +1,22 @@
-[package]
-name = "ethercrab-wire"
+[package] #该部分包含了 Rust 包的元数据信息。
+name = "ethercrab-wire"                                                    #包的名称
 version = "0.2.0"
-edition = "2021"
+edition = "2021"                                                           #指定使用的 Rust 版本，2021 表示使用 2021 版的 Rust
 categories = ["science::robotics", "no-std", "network-programming"]
 license = "MIT OR Apache-2.0"
-readme = "README.md"
+readme = "README.md"                                                       #指定项目 README 文件的路径
 repository = "https://github.com/ethercrab-rs/ethercrab"
 documentation = "https://docs.rs/ethercrab-wire"
 description = "On-the-wire tools for the EtherCrab crate"
 keywords = ["ethercat", "ethercrab", "beckhoff", "automation", "fieldbus"]
-resolver = "2"
-rust-version = "1.79"
+resolver = "2"                                                             #指定 Cargo 使用的版本解析器，2 表示使用新版解析器。
+rust-version = "1.79"                                                      #构建该包所需的最低 Rust 编译器版本
 
-[dependencies]
-defmt = { version = "0.3.5", optional = true }
-ethercrab-wire-derive = { version = "0.2.0", path = "../ethercrab-wire-derive" }
-heapless = { version = "0.8.0", default-features = false }
+[dependencies] #该部分列出了项目运行所依赖的其他包。
+defmt = { version = "0.3.5", optional = true }                                   #一个日志记录和格式化库，optional = true 表示这是一个可选依赖，可以通过特性（features）来启用。
+ethercrab-wire-derive = { version = "0.2.0", path = "../ethercrab-wire-derive" } #本地依赖包，版本号与当前包相同，path 指定了该依赖包的相对路径。
+heapless = { version = "0.8.0", default-features = false }                       #一个提供无堆数据结构的库，default-features = false 表示禁用该库的默认特性。
 
-[features]
+[features] #该部分定义了可选特性，可用于启用或禁用特定的依赖项或功能。
 std = []
 defmt-03 = ["dep:defmt", "heapless/defmt-03"]

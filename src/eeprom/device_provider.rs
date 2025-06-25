@@ -10,12 +10,14 @@ use crate::{
     timer_factory::IntoTimeout,
 };
 
+// 第一个category的字地址
 /// The address of the first proper category, positioned after the fixed fields defined in ETG2010
 /// Table 2.
 ///
 /// SII EEPROM is WORD-addressed.
 pub(crate) const SII_FIRST_CATEGORY_START: u16 = 0x0040u16;
 
+// DeviceEeprom类型实现了EepromDataProvider trait
 /// EEPROM data provider that communicates with a physical sub device.
 #[derive(Clone)]
 pub struct DeviceEeprom<'subdevice> {
@@ -24,6 +26,7 @@ pub struct DeviceEeprom<'subdevice> {
 }
 
 impl<'subdevice> DeviceEeprom<'subdevice> {
+    // DeviceEeprom类型实现了EepromDataProvider trait
     /// Create a new EEPROM reader instance.
     pub fn new(maindevice: &'subdevice MainDevice<'subdevice>, configured_address: u16) -> Self {
         Self {
@@ -32,6 +35,7 @@ impl<'subdevice> DeviceEeprom<'subdevice> {
         }
     }
 
+    // 等待 EEPROM 空闲，或者超时
     async fn wait_while_busy(&self) -> Result<SiiControl, Error> {
         let res = async {
             loop {
@@ -40,6 +44,7 @@ impl<'subdevice> DeviceEeprom<'subdevice> {
                         .receive::<SiiControl>(self.maindevice)
                         .await?;
 
+                // 检查SII是否忙，不忙跳出循环
                 if !control.busy {
                     break Ok(control);
                 }
@@ -55,18 +60,22 @@ impl<'subdevice> DeviceEeprom<'subdevice> {
 }
 
 impl EepromDataProvider for DeviceEeprom<'_> {
+    // 从EEPROM中读取4或8字节数据
     async fn read_chunk(
         &mut self,
         start_word: u16,
     ) -> Result<impl core::ops::Deref<Target = [u8]>, Error> {
+        // FPWR 0x0502 读取位置1：发送读取请求
         Command::fpwr(self.configured_address, RegisterAddress::SiiControl.into())
             .send(self.maindevice, SiiRequest::read(start_word))
             .await?;
 
+        // 等待 EEPROM 空闲，或者超时
         let status = self.wait_while_busy().await?;
 
+        // FPRD 0x0508 获取EEPROM数据
         Command::fprd(self.configured_address, RegisterAddress::SiiData.into())
-            .receive_slice(self.maindevice, status.read_size.chunk_len())
+            .receive_slice(self.maindevice, status.read_size.chunk_len()) // 根据EEPROM允许一次读取4或8字节，决定读取数据的长度
             .await
             .inspect(|data| {
                 #[cfg(not(feature = "defmt"))]
@@ -109,7 +118,9 @@ impl EepromDataProvider for DeviceEeprom<'_> {
         Ok(())
     }
 
+    // 尝试清除 EEPROM 数据源中的错误
     async fn clear_errors(&self) -> Result<(), Error> {
+        // FPRD 0x0502
         let status = Command::fprd(self.configured_address, RegisterAddress::SiiControl.into())
             .receive::<SiiControl>(self.maindevice)
             .await?;
@@ -118,6 +129,8 @@ impl EepromDataProvider for DeviceEeprom<'_> {
         let status = if status.has_error() {
             fmt::trace!("Resetting EEPROM error flags");
 
+            // FPWR 0x0502 清除故障。会检查WKC
+            // 访问单个从站时，默认给预期WKC设置为1
             Command::fpwr(self.configured_address, RegisterAddress::SiiControl.into())
                 .send_receive(self.maindevice, status.error_reset())
                 .await?
@@ -125,6 +138,7 @@ impl EepromDataProvider for DeviceEeprom<'_> {
             status
         };
 
+        // 再次检查新的状态是否包含错误标志
         if status.has_error() {
             Err(Error::Eeprom(EepromError::ClearErrors))
         } else {

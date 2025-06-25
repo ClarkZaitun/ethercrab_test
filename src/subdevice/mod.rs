@@ -64,13 +64,16 @@ pub struct SubDevice {
     pub(crate) name: heapless::String<64>,
 
     // pub(crate) flags: SupportFlags,
+    // 端口顺序为 0 -> 3 -> 1 -> 2
     pub(crate) ports: Ports,
 
     pub(crate) dc_support: DcSupport,
 
     /// Distributed Clock latch receive time.
+    // ECAT 处理单元接收到的帧开始时的本地时间（前导码的第一位）
     pub(crate) dc_receive_time: u64,
 
+    // 从站序号
     /// The index of the SubDevice in the EtherCAT tree.
     pub(crate) index: u16,
 
@@ -142,12 +145,14 @@ impl SubDevice {
     ///
     /// This method reads the SubDevices's name and other identifying information, but does not
     /// configure it.
+    // 确认从站在init状态；从EEPROM读取从站名称和标识信息；从寄存器读取ESC支持功能，地址别名，端口，创建从站
     pub(crate) async fn new<'sto>(
         maindevice: &'sto MainDevice<'sto>,
         index: u16,
         configured_address: u16,
     ) -> Result<Self, Error> {
         let subdevice_ref = SubDeviceRef::new(maindevice, configured_address, ());
+        // 状态数据S是泛型参数，这里实例化为()
 
         fmt::debug!(
             "Waiting for SubDevice {:#06x} to enter {}",
@@ -155,19 +160,26 @@ impl SubDevice {
             SubDeviceState::Init
         );
 
+        // 持续FPRD 0x0130，确认从站进入init状态
         subdevice_ref.wait_for_state(SubDeviceState::Init).await?;
 
+        // 设置EEPROM控制权在主站
         // Make sure master has access to SubDevice EEPROM
         subdevice_ref.set_eeprom_mode(SiiOwner::Master).await?;
 
+        // 创建从站EEPROM变量，包含操作EEPROM的DeviceEeprom类型。DeviceEeprom类型实现了EepromDataProvider trait
         let eeprom = subdevice_ref.eeprom();
 
+        // 从EEPROM读取0x0008地址的标识信息
         let identity = eeprom.identity().await?;
 
+        // 从EEPROM读取从站名称
+        // device_name调用时，怎么推断N=64？后文name作为new函数的返回值可以推断出来
         let name = eeprom.device_name().await?.unwrap_or_else(|| {
             let mut s = heapless::String::new();
 
             fmt::unwrap!(
+                // write! 宏用于把格式化后的字符串写入实现了 core::fmt::Write trait 的对象中
                 write!(
                     s,
                     "manu. {:#010x}, device {:#010x}, serial {:#010x}",
@@ -179,6 +191,7 @@ impl SubDevice {
             s
         });
 
+        // FPRD 0x0008 ESC支持功能
         let flags = subdevice_ref
             .read(RegisterAddress::SupportFlags)
             .receive::<SupportFlags>(maindevice)
@@ -186,11 +199,13 @@ impl SubDevice {
 
         fmt::debug!("--> Support flags {:?}", flags);
 
+        // FPRD 0x0012 地址别名
         let alias_address = subdevice_ref
             .read(RegisterAddress::ConfiguredStationAlias)
             .receive::<u16>(maindevice)
             .await?;
 
+        // FPRD 0x0110 端口
         let ports = subdevice_ref
             .read(RegisterAddress::DlStatus)
             .receive::<DlStatus>(maindevice)
@@ -225,11 +240,12 @@ impl SubDevice {
             propagation_delay: 0,
             dc_receive_time: 0,
             identity,
-            name,
+            name, // 这里可以推断出来name的类型为，heapless::String<64>，所以N为64
             dc_support: flags.dc_support(),
             ports,
             dc_sync: DcSync::Disabled,
             // 0 is a reserved value, so we initialise the cycle at 1. The cycle repeats 1 - 7.
+            // 邮箱头的计数器字段，取值范围1-7，用于计算重复检测的顺序编号
             mailbox_counter: AtomicU8::new(1),
         })
     }
@@ -401,6 +417,7 @@ impl SubDevice {
         &self.config.io
     }
 
+    // 检查当前子设备是否为“父设备”的子设备
     /// Check if the current SubDevice is a child of `parent`.
     ///
     /// A SubDevice is a child of a parent if it is connected to an intermediate port of the
@@ -419,6 +436,7 @@ impl SubDevice {
         let parent_port = parent.ports.port_assigned_to(self);
 
         // Children in a fork must be connected to intermediate ports
+        // 判断当前端口是否为从站的最后一个端口（ESC顺序）
         let child_attached_to_last_parent_port =
             parent_port.is_some_and(|child_port| parent.ports.is_last_port(child_port));
 
@@ -432,11 +450,11 @@ impl SubDevice {
 /// [`SubDeviceGroup`](crate::subdevice_group::SubDeviceGroup) methods to allow the reading and
 /// writing of a SubDevice's process data.
 #[derive(Debug)]
-#[doc(alias = "SlaveRef")]
+#[doc(alias = "SlaveRef")] // 提供文档别名，便于搜索
 pub struct SubDeviceRef<'maindevice, S> {
-    pub(crate) maindevice: &'maindevice MainDevice<'maindevice>,
+    pub(crate) maindevice: &'maindevice MainDevice<'maindevice>, // 对主设备(MainDevice)的不可变引用
     pub(crate) configured_address: u16,
-    state: S,
+    state: S, // 从站设备的状态数据，类型为泛型参数 S，类型由传入的参数自动推断
 }
 
 impl Clone for SubDeviceRef<'_, ()> {
@@ -1080,7 +1098,7 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
     pub(crate) fn new(
         maindevice: &'maindevice MainDevice<'maindevice>,
         configured_address: u16,
-        state: S,
+        state: S, // S 的类型由传入的 state 参数自动推断
     ) -> Self {
         Self {
             maindevice,
@@ -1127,7 +1145,9 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
         futures_lite::future::try_zip(self.state(), code).await
     }
 
+    // 创建从站EEPROM变量，包含操作EEPROM的DeviceEeprom类型
     fn eeprom(&self) -> SubDeviceEeprom<DeviceEeprom> {
+        // DeviceEeprom类型实现了EepromDataProvider trait
         SubDeviceEeprom::new(DeviceEeprom::new(self.maindevice, self.configured_address))
     }
 
@@ -1155,9 +1175,11 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
             .await
     }
 
+    // 持续FPRD 0x0130，确认从站进入某个状态，直到超时或已经到正确的状态
     pub(crate) async fn wait_for_state(&self, desired_state: SubDeviceState) -> Result<(), Error> {
         async {
             loop {
+                // FPRD 0x0130得到状态
                 let status = self
                     .read(RegisterAddress::AlStatus)
                     .ignore_wkc()
@@ -1168,13 +1190,15 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
                     break Ok(());
                 }
 
+                // 延迟
                 self.maindevice.timeouts.loop_tick().await;
             }
         }
+        //
         .timeout(self.maindevice.timeouts.state_transition)
         .await
     }
-
+    // FPWR
     pub(crate) fn write(&self, register: impl Into<u16>) -> WrappedWrite {
         Command::fpwr(self.configured_address, register.into())
     }
@@ -1227,13 +1251,17 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
         self.wait_for_state(desired_state).await
     }
 
+    // 设置EEPROM PDI模式
     pub(crate) async fn set_eeprom_mode(&self, mode: SiiOwner) -> Result<(), Error> {
         // ETG1000.4 Table 48 – SubDevice information interface access
         // A value of 2 sets owner to Master (not PDI) and cancels access
+        // FPWR 0x0500 数据2
+        // Reset Bit 0x0501[0] to 0: PDI releases EEPROM access
         self.write(RegisterAddress::SiiConfig)
             .send(self.maindevice, 2u16)
             .await?;
 
+        // FPWR 0x0500 数据mode，0为主站，1为PDI
         self.write(RegisterAddress::SiiConfig)
             .send(self.maindevice, mode)
             .await?;

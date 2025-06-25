@@ -49,7 +49,7 @@ use ethercrab_wire::EtherCrabWireSized;
 /// ```
 #[derive(Debug)]
 pub struct SendableFrame<'sto> {
-    pub(in crate::pdu_loop) inner: FrameBox<'sto>,
+    pub(in crate::pdu_loop) inner: FrameBox<'sto>, //保存帧的指针，索引，数据长度
 }
 
 unsafe impl Send for SendableFrame<'_> {}
@@ -60,7 +60,7 @@ impl<'sto> SendableFrame<'sto> {
         pdu_idx: &'sto AtomicU8,
         frame_data_len: usize,
     ) -> Option<Self> {
-        let frame = unsafe { FrameElement::claim_sending(frame)? };
+        let frame = unsafe { FrameElement::claim_sending(frame)? }; //标记帧状态为正在发送
 
         Some(Self {
             inner: FrameBox::new(frame, pdu_idx, frame_data_len),
@@ -100,16 +100,18 @@ impl<'sto> SendableFrame<'sto> {
         self.as_bytes().len()
     }
 
+    //使用阻塞回调函数（闭包）发送帧。同时指出，闭包必须返回通过网络接口发送的字节数，若该数值与传入闭包的数据包长度不一致，方法将返回错误。
     /// Send the frame using a blocking callback.
     ///
     /// The closure must return the number of bytes sent over the network interface. If this does
     /// not match the length of the packet passed to the closure, this method will return an error.
     pub fn send_blocking(
         self,
-        send: impl FnOnce(&[u8]) -> Result<usize, Error>,
+        send: impl FnOnce(&[u8]) -> Result<usize, Error>, //接收一个闭包作为参数，该闭包接收一个字节切片引用，返回 Result<usize, Error> 类型。FnOnce 表示该闭包只能被调用一次
     ) -> Result<usize, Error> {
         let len = self.as_bytes().len();
 
+        //调用传入的闭包 send，将 self.as_bytes() 返回的字节切片作为参数传递给闭包，使用 match 语句处理闭包的返回结果
         match send(self.as_bytes()) {
             Ok(bytes_sent) if bytes_sent == len => {
                 self.mark_sent();

@@ -5,16 +5,21 @@ use core::{fmt::Debug, num::NonZeroU16};
 #[derive(Default, Debug, PartialEq, Eq, Copy, Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Port {
+    // 是否激活
     pub active: bool,
+    // 端口的接收时间
     pub dc_receive_time: u32,
     /// The EtherCAT port number, ordered as 0 -> 3 -> 1 -> 2.
+    // 端口序号
     pub number: u8,
     /// Holds the index of the downstream SubDevice this port is connected to.
+    // 保存此端口连接到的下游子设备的地址，用于还原拓扑
     pub downstream_to: Option<NonZeroU16>,
 }
 
 impl Port {
     // TODO: Un-pub
+    // 端口序号转换到端口数组Ports的下标
     pub(crate) fn index(&self) -> usize {
         match self.number {
             0 => 0,
@@ -40,6 +45,7 @@ pub enum Topology {
 }
 
 impl Topology {
+    // 判断是否为分叉节点或者交叉节点
     pub fn is_junction(&self) -> bool {
         matches!(self, Self::Fork | Self::Cross)
     }
@@ -102,6 +108,7 @@ impl Ports {
         time_p2: u32,
     ) {
         // NOTE: indexes vs EtherCAT port order
+        // 注意端口的顺序
         self.0[0].dc_receive_time = time_p0;
         self.0[1].dc_receive_time = time_p3;
         self.0[2].dc_receive_time = time_p1;
@@ -125,23 +132,35 @@ impl Ports {
         *self
     }
 
+    // 如果写成C风格代码，不优雅，但性能很好
+    // 计算从站激活端口数量
     fn open_ports(&self) -> u8 {
+        // 调用迭代器的 count 方法，该方法会遍历迭代器中的所有元素并返回元素的数量，类型为 usize
         self.active_ports().count() as u8
     }
 
+    // 返回一个迭代器，该迭代器会遍历 Ports 结构体中所有处于激活状态的端口
     fn active_ports(&self) -> impl Iterator<Item = &Port> + Clone {
+        // Ports 结构体是一个元组结构体，self.0 访问其内部存储的 [Port; 4] 数组
+        // .iter()：调用数组的 iter 方法，返回一个迭代器，该迭代器会遍历数组中的每个元素，产生元素的不可变引用
+        // .filter(|port| port.active)：调用迭代器的 filter 方法，传入一个闭包 |port| port.active。
+        // filter 方法会对迭代器中的每个元素应用该闭包，只保留闭包返回 true 的元素。这里的闭包检查 Port 结构体的 active 字段是否为 true，即端口是否处于激活状态
         self.0.iter().filter(|port| port.active)
     }
 
     /// The port of the SubDevice that first sees EtherCAT traffic.
+    // 获取当前设备中第一个接收到 EtherCAT 流量的端口，该端口是流量进入设备的入口
+    // 正确的网线连接都是端口0。如果网线反接才是其他端口。这个库允许反接的情况?
     pub fn entry_port(&self) -> Port {
         fmt::unwrap_opt!(
-            self.active_ports()
-                .min_by_key(|port| port.dc_receive_time)
-                .copied()
+            self.active_ports() // 返回一个迭代器，该迭代器会遍历 Ports 结构体中所有处于激活状态的端口
+                .min_by_key(|port| port.dc_receive_time) // 找到端口接收时间最小的端口
+                .copied() // 将 Option<&Port> 类型转换为 Option<Port> 类型
         )
     }
 
+    // 获取最后一个开放端口
+    // 这里的最后一个的意思是ESC激活端口顺序的最后一个，不是按照端口接收时间最大判断出的物理连接顺序最后的那个
     /// Get the last open port.
     pub fn last_port(&self) -> Option<&Port> {
         self.active_ports().last()
@@ -149,66 +168,85 @@ impl Ports {
 
     /// Find the next port that hasn't already been assigned as the upstream port of another
     /// SubDevice.
+    // 找出下一个还未被指定为其他从设备（SubDevice）上游端口的端口
     fn next_assignable_port(&mut self, this_port: &Port) -> Option<&mut Port> {
+        // 端口序号转换到端口数组Ports的下标
         let this_port_index = this_port.index();
 
         let next_port_index = self
             .active_ports()
-            .cycle()
+            .cycle() // 将迭代器转换为循环迭代器，当遍历到激活端口列表末尾时，会重新从列表开头开始遍历
             // Start at the next port
+            // 从下一个端口开始查找
             .skip(this_port_index + 1)
-            .take(4)
-            .find(|next_port| next_port.downstream_to.is_none())?
-            .index();
+            .take(4) // 最多只查看 4 个端口，避免无限循环
+            .find(|next_port| next_port.downstream_to.is_none())? // 查找第一个 downstream_to 字段为 None 的端口
+            .index(); // 获取找到的端口在 Ports 结构体内部数组中的索引
 
         self.0.get_mut(next_port_index)
     }
 
     /// Link a downstream device to the current device using the next open port from the entry port.
+    // 使用入口端口的下一个开放端口将下游设备链接到当前设备，返回端口序号
     pub fn assign_next_downstream_port(
         &mut self,
         downstream_subdevice_index: NonZeroU16,
     ) -> Option<u8> {
+        // 获取当前设备中第一个接收到 EtherCAT 流量的端口，该端口是流量进入设备的入口
         let entry_port = self.entry_port();
 
+        // 找出下一个还未被指定为其他从设备（SubDevice）上游端口的端口
         let next_port = self.next_assignable_port(&entry_port)?;
 
+        // 将本端口分配给下游从站
+        // 需要考证为什么下一个还未被指定为其他从设备（SubDevice）上游端口的端口，就是寻找的要连接的端口
+        // 接错的情况下又会发生什么？
         next_port.downstream_to = Some(downstream_subdevice_index);
 
+        // 返回端口序号
         Some(next_port.number)
     }
 
     /// Find the port assigned to the given SubDevice.
+    // 通过父从站的端口连接的从站索引找到在当前 Ports 实例里分配给指定从站的端口
     pub fn port_assigned_to(&self, subdevice: &SubDevice) -> Option<&Port> {
         self.active_ports()
             .find(|port| port.downstream_to.map(|idx| idx.get()) == Some(subdevice.index))
     }
 
+    // 根据端口数量，判断从站是什么类型的拓扑节点
     pub fn topology(&self) -> Topology {
+        // 计算从站激活端口数量
         match self.open_ports() {
-            1 => Topology::LineEnd,
-            2 => Topology::Passthrough,
-            3 => Topology::Fork,
-            4 => Topology::Cross,
+            1 => Topology::LineEnd,     // 叶子
+            2 => Topology::Passthrough, // 直线
+            3 => Topology::Fork,        // 分叉
+            4 => Topology::Cross,       // 交叉
             n => unreachable!("Invalid topology {}", n),
         }
     }
 
+    // 判断当前端口是否为从站的最后一个端口（ESC顺序）
     pub fn is_last_port(&self, port: &Port) -> bool {
+        // 获取最后一个开放端口，和当前端口对比
         self.last_port().filter(|p| *p == port).is_some()
     }
 
     /// The time in nanoseconds for a packet to completely traverse all active ports of a SubDevice.
-    #[deny(clippy::arithmetic_side_effects)]
+    // 计算从站4个端口最大和最小接收时间的差值，就是帧在从站之后网络传输的时间
+    // 如果假设线缆延迟均匀，并且所有从站设备的处理和转发延迟一样
+    #[deny(clippy::arithmetic_side_effects)] // 禁止可能产生意外算术副作用（如整数溢出、下溢）的操作
     pub fn total_propagation_time(&self) -> Option<u32> {
+        // 得到一个只包含激活端口接收时间的迭代器
         let times = self
             .0
             .iter()
             .filter_map(|port| port.active.then_some(port.dc_receive_time));
 
+        // 计算最大和最小接收时间的差值
         times
-            .clone()
-            .max()
+            .clone() // 由于迭代器是消耗性的，调用 max 方法会消耗迭代器
+            .max() // 在克隆的迭代器中查找最大的接收时间
             .and_then(|max| times.min().map(|min| max.saturating_sub(min)))
             .filter(|t| *t > 0)
     }

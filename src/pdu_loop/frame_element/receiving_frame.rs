@@ -16,11 +16,13 @@ pub struct ReceivingFrame<'sto> {
 }
 
 impl<'sto> ReceivingFrame<'sto> {
+    // Sent 状态的帧标记为 RxBusy 状态
     pub(in crate::pdu_loop) fn claim_receiving(
         frame: NonNull<FrameElement<0>>,
         pdu_idx: &'sto AtomicU8,
         frame_data_len: usize,
     ) -> Option<Self> {
+        //尝试将一个处于 Sent 状态的帧标记为 RxBusy 状态，即声明该帧开始接收响应数据。成功后返回帧指针
         let frame = unsafe { FrameElement::claim_receiving(frame)? };
 
         Some(Self {
@@ -28,6 +30,7 @@ impl<'sto> ReceivingFrame<'sto> {
         })
     }
 
+    // 标记 RxBusy 帧的状态为RxDone，唤醒帧相关的任务
     /// Mark the frame as fully received.
     ///
     /// This method may only be called once the frame response (header and data) has been validated
@@ -51,6 +54,8 @@ impl<'sto> ReceivingFrame<'sto> {
                 PduError::InvalidFrameState
             })?;
 
+        //在完成状态更新后，需要唤醒缓冲区中的帧关联的任务，通知等待该帧响应的任务，告知它们帧已经接收完毕
+        //当响应在执行器首次轮询该 future 之前就已经收到时，帧可能没有 waker，此时 wake() 会返回错误，但这种错误属于正常情况，因此可以忽略
         // wake() returns an error if there is no waker. A frame might have no waker if the response
         // is received over the network before the chosen executor has a chance to poll the future
         // for the first time, so we'll ignore that error otherwise we might get false positives.
@@ -59,6 +64,7 @@ impl<'sto> ReceivingFrame<'sto> {
         Ok(())
     }
 
+    //获取一个可变的字节切，该切片指向 EtherCAT数据报
     pub(in crate::pdu_loop) fn buf_mut(&mut self) -> &mut [u8] {
         self.inner.pdu_buf_mut()
     }
@@ -79,7 +85,7 @@ pub struct ReceiveFrameFut<'sto> {
 
 impl<'sto> ReceiveFrameFut<'sto> {
     /// Get entire frame buffer. Only really useful for assertions in tests.
-    #[cfg(test)]
+    #[cfg(test)] // 将代码限定在测试环境下编译
     pub fn buf(&self) -> &[u8] {
         use crate::{ethernet::EthernetFrame, pdu_loop::frame_header::EthercatFrameHeader};
         use ethercrab_wire::EtherCrabWireSized;
@@ -94,6 +100,7 @@ impl<'sto> ReceiveFrameFut<'sto> {
         &b.into_inner()[0..len]
     }
 
+    // 设置帧状态为None
     fn release(r: FrameBox<'sto>) {
         // Make frame available for reuse if this future is dropped.
         r.set_state(FrameState::None);
@@ -112,20 +119,27 @@ unsafe impl Send for ReceiveFrameFut<'_> {}
 impl<'sto> Future for ReceiveFrameFut<'sto> {
     type Output = Result<ReceivedFrame<'sto>, Error>;
 
+    // 检查帧是否接收完成，处理超时情况，并根据帧的状态决定是继续等待、返回成功结果还是返回错误结果。同时，它还处理了重试逻辑，在超时且有重试次数时重新发送帧
     fn poll(
-        mut self: core::pin::Pin<&mut Self>,
-        cx: &mut core::task::Context<'_>,
+        mut self: core::pin::Pin<&mut Self>, // 接收一个可变的 Pin 指针，Pin 用于确保 self 不会被移动，这在处理自引用结构体时很重要
+        cx: &mut core::task::Context<'_>, // 任务上下文，包含一个 Waker，用于在异步操作准备好时唤醒任务
     ) -> Poll<Self::Output> {
+        // 检查帧是否已被取出。
+        // 已取出就是发送了？或者正在被这个函数处理？
+        // take 把 Option 内部的值取出来，同时将原 Option 置为 None。在取值过程中，它会获取 Option 内部值的所有权
         let Some(rxin) = self.frame.take() else {
+            //如果 self.frame 为 None，说明帧已经被取出，记录错误日志并返回 Err 表示操作失败
             fmt::error!("Frame is taken");
 
             return Poll::Ready(Err(PduError::InvalidFrameState.into()));
         };
 
+        // 将 rxin 中的唤醒器替换为当前任务上下文的唤醒器，以便在帧准备好时能唤醒当前任务
         rxin.replace_waker(cx.waker());
 
         let frame_idx = rxin.storage_slot_index();
 
+        // 尝试将帧的状态从 RxDone 交换为 RxProcessing。如果交换成功，说明帧已经接收完成，记录日志并返回 Ok 表示操作成功；如果交换失败，记录之前的状态
         // RxDone is set by mark_received when the incoming packet has been parsed and stored
         let swappy = rxin.swap_state(FrameState::RxDone, FrameState::RxProcessing);
 
@@ -140,6 +154,11 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
 
         fmt::trace!("frame index {} not ready yet ({:?})", frame_idx, was);
 
+        // 检查超时
+        // 对超时定时器进行 poll 操作。如果定时器超时且没有重试次数了，释放帧并返回 Err 表示超时；
+        // 如果还有重试次数，重新设置定时器，将帧状态设置为 Sendable 并唤醒帧发送器，减少重试次数。
+        // 如果定时器未超时，则继续等待。
+        // ??帧处理完成后会检查超时，以便我们至少有一次机会从网络接收回复。这应该可以缓解在帧刚收到时超时导致的竞争情况。
         // Timeout checked after frame handling so we get at least one chance to receive reply from
         // network. This should mitigate race conditions when timeout expires just as the frame is
         // received.
@@ -180,10 +199,11 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
 
         match was {
             FrameState::Sendable | FrameState::Sending | FrameState::Sent | FrameState::RxBusy => {
-                self.frame = Some(rxin);
+                self.frame = Some(rxin); // 将帧重新放回 self.frame，归还所有权
 
-                Poll::Pending
+                Poll::Pending // 返回 Pending 表示操作未完成
             }
+            // 这个帧被错误地处理，没有在正确的状态
             state => {
                 fmt::error!("Frame is in invalid state {:?}", state);
 

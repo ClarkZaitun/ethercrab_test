@@ -18,6 +18,7 @@ pub enum SiiOwner {
     Pdi = 0x01,
 }
 
+// 0x0502 寄存器
 /// Defined in ETG1000.4 6.4.3
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default, ethercrab_wire::EtherCrabWireReadWrite)]
 #[wire(bytes = 2)]
@@ -29,7 +30,7 @@ pub struct SiiControl {
     #[wire(pre_skip = 4, bits = 1)]
     pub emulate_sii: bool,
     #[wire(bits = 1)]
-    pub read_size: SiiReadSize,
+    pub read_size: SiiReadSize, // 4或者8
     #[wire(bits = 1)]
     pub address_type: SiiAddressSize,
 
@@ -126,7 +127,7 @@ pub enum SiiAddressSize {
 #[wire(bytes = 6)]
 pub struct SiiRequest {
     #[wire(bytes = 2)]
-    control: SiiControl,
+    control: SiiControl, // 0x0502 寄存器
     // Post skip is required to send the correct amount of bytes on the wire. This is weird because
     // addressing is all a single WORD, but the SII read request expects a low AND high WORD, hence
     // the extra 16 bits of padding here for the unusedhigh WORD.
@@ -235,6 +236,8 @@ pub enum SiiCoding {
     Version = 0x003F,
 }
 
+// Category 从0x40 word 开始
+// 此为Category类型的枚举
 /// Defined in ETG1000.6 Table 19.
 ///
 /// Additional information also in ETG1000.6 Table 17.
@@ -338,6 +341,7 @@ impl EtherCrabWireRead for PortStatuses {
     }
 }
 
+// EEPROM中"General" category的数据区结构体
 /// SII "General" category.
 ///
 /// Defined in ETG1000.6 Table 21
@@ -364,7 +368,7 @@ pub struct SiiGeneral {
     // ds402_channels: u8,
     // sysman_class: u8,
     #[wire(bytes = 1)]
-    pub(crate) flags: Flags,
+    pub(crate) flags: Flags, // 标记是否ESC支持LRW命令
     /// EBus Current Consumption in mA.
     ///
     /// A negative Values means feeding in current feed in sets the available current value to the
@@ -546,6 +550,7 @@ impl defmt::Format for SyncManagerEnable {
     }
 }
 
+// 来自EEPROM的SM配置
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, ethercrab_wire::EtherCrabWireRead)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
@@ -716,7 +721,9 @@ impl defmt::Format for PdoFlags {
     }
 }
 
+// bitflags::bitflags! 是 bitflags 库提供的宏，用于便捷地定义位标志类型。借助该宏，能轻松创建可组合的位标志。
 bitflags::bitflags! {
+    // EEPROM中支持的邮箱协议
     /// Supported mailbox category.
     ///
     /// Defined in ETG1000.6 Table 18 or ETG2010 Table 4.
@@ -739,21 +746,27 @@ bitflags::bitflags! {
 }
 
 impl EtherCrabWireSized for MailboxProtocols {
+    // ETG1000.6 Table 18 or ETG2010 Table 4中原本是u16，所以虽然定义为u8,但是长度设置为2字节
     const PACKED_LEN: usize = 2;
 
     type Buffer = [u8; Self::PACKED_LEN];
 
+    // 没有使用默认的trait函数实现，而是单独实现
     fn buffer() -> Self::Buffer {
         [0u8; Self::PACKED_LEN]
     }
 }
 
 impl EtherCrabWireRead for MailboxProtocols {
+    // 没有使用默认的trait函数实现，而是单独实现
+    // 从字节切片中解析出 MailboxProtocols 实例
     fn unpack_from_slice(buf: &[u8]) -> Result<Self, ethercrab_wire::WireError> {
         // NOTE: Is actually a u16, but only the lower byte has any data in it
+        // buf.first() 尝试获取字节切片 buf 的第一个元素
         buf.first()
             .ok_or(ethercrab_wire::WireError::ReadBufferTooShort)
             .and_then(|res| Self::from_bits(*res).ok_or(ethercrab_wire::WireError::InvalidValue))
+        // 调用 Self::from_bits(*res) 尝试将该字节转换为 MailboxProtocols 实例
     }
 }
 

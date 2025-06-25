@@ -106,6 +106,7 @@ macro_rules! panic_ {
     };
 }
 
+// 定义宏，可以配置打印的库或者不打印
 macro_rules! trace_ {
     ($s:literal $(, $x:expr)* $(,)?) => {
         {
@@ -119,6 +120,7 @@ macro_rules! trace_ {
     };
 }
 
+// 依据不同的编译特性，输出调试级别的日志信息
 macro_rules! debug_ {
     ($s:literal $(, $x:expr)* $(,)?) => {
         {
@@ -179,6 +181,7 @@ macro_rules! unwrap_ {
 }
 
 #[cfg(not(feature = "defmt"))]
+// 对 Result 类型的值进行解包操作。若 Result 是 Ok 变体，宏会返回其中的值；若为 Err 变体，则触发 panic
 macro_rules! unwrap_ {
     ($arg:expr) => {
         match $arg {
@@ -205,8 +208,11 @@ macro_rules! unwrap_opt_ {
     };
 }
 
-#[cfg(not(feature = "defmt"))]
+// 对 Option 类型的值进行解包操作，若 Option 为 Some 则返回其中的值，若为 None 则触发 panic
+#[cfg(not(feature = "defmt"))] //该宏仅在未启用 defmt 特性时生效
 macro_rules! unwrap_opt_ {
+    // 单参数匹配规则
+    // 接受一个表达式作为参数，$arg 代表传入的 Option 类型表达式
     ($arg:expr) => {
         match $arg {
             ::core::option::Option::Some(t) => t,
@@ -215,10 +221,14 @@ macro_rules! unwrap_opt_ {
             }
         }
     };
+    // 多参数匹配规则
+    // 接受一个 Option 类型表达式 $arg 和至少一个额外的消息表达式 $($msg:expr),+
+    // $(,)? 表示最后一个参数后的逗号是可选的
     ($arg:expr, $($msg:expr),+ $(,)? ) => {
         match $arg {
             ::core::option::Option::Some(t) => t,
             ::core::option::Option::None => {
+                // 错误信息除了包含尝试解包的表达式名称，还会包含用户传入的额外消息
                 ::core::panic!("unwrap of `{}` failed: {}", ::core::stringify!($arg), ::core::format_args!($($msg,)*));
             }
         }

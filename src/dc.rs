@@ -15,17 +15,20 @@ use crate::{
     subdevice::{SubDevice, ports::Topology},
 };
 
+// 获取每个DC从站的端口接收时间
 /// Send a broadcast to all SubDevices to latch in DC receive time, then store it on the SubDevice
 /// structs.
 async fn latch_dc_times(
     maindevice: &MainDevice<'_>,
     subdevices: &mut [SubDevice],
 ) -> Result<(), Error> {
+    // 过滤出支持DC的从站数量
     let num_subdevices_with_dc: usize = subdevices
         .iter()
         .filter(|subdevice| subdevice.dc_support().any())
         .count();
 
+    // BWR 0x0900 锁存端口时间，会检查WKC
     // Latch receive times into all ports of all SubDevices.
     Command::bwr(RegisterAddress::DcTimePort0.into())
         .with_wkc(num_subdevices_with_dc as u16)
@@ -40,12 +43,17 @@ async fn latch_dc_times(
         let mut subdevice =
             SubDeviceRef::new(maindevice, subdevice.configured_address(), subdevice);
 
+        // FPRD 0x0918 EtherCAT帧处理单元时间，实际上就是端口0时间。忽略WKC
+        // ECAT 处理单元接收到的帧开始时的本地时间（前导码的第一位），包含对寄存器 0x​​0900 的写访问
+        // 注意：例如，如果端口 0 处于打开状态，则该寄存器将端口 0 的接收时间反映为 64 位值。
+        // 对寄存器 0x​​0900 的任何有效 EtherCAT 写访问都会触发锁存，而不仅仅是寄存器 0x​​0900 的 BWR/FPWR 命令。
         let dc_receive_time = subdevice
             .read(RegisterAddress::DcReceiveTime)
             .ignore_wkc()
             .receive::<u64>(maindevice)
             .await?;
 
+        // FPRD 0x0900 读取端口时间
         let [time_p0, time_p1, time_p2, time_p3] = subdevice
             .read(RegisterAddress::DcTimePort0)
             .receive::<[u32; 4]>(maindevice)
@@ -74,6 +82,7 @@ async fn latch_dc_times(
     Ok(())
 }
 
+// 设置时钟偏移和传播延迟
 /// Write DC system time offset and propagation delay to the SubDevice memory.
 async fn write_dc_parameters(
     maindevice: &MainDevice<'_>,
@@ -81,6 +90,7 @@ async fn write_dc_parameters(
     dc_system_time: u64,
     now_nanos: u64,
 ) -> Result<(), Error> {
+    // 计算时钟偏移
     let system_time_offset = -(subdevice.dc_receive_time as i64) + now_nanos as i64;
 
     fmt::trace!(
@@ -92,6 +102,7 @@ async fn write_dc_parameters(
         now_nanos
     );
 
+    // FPWR 0x0920 时钟偏移，不检查WKC
     Command::fpwr(
         subdevice.configured_address(),
         RegisterAddress::DcSystemTimeOffset.into(),
@@ -100,6 +111,7 @@ async fn write_dc_parameters(
     .send(maindevice, system_time_offset)
     .await?;
 
+    // FPWR 0x0928 传播延迟补偿，不检查WKC
     Command::fpwr(
         subdevice.configured_address(),
         RegisterAddress::DcSystemTimeTransmissionDelay.into(),
@@ -111,6 +123,7 @@ async fn write_dc_parameters(
     Ok(())
 }
 
+// 查找与当前从站连接的前一个从站（父节点）
 /// Find the SubDevice parent device in the list of SubDevices before it in the linear topology.
 ///
 /// # Implementation detail
@@ -148,12 +161,15 @@ fn find_subdevice_parent(
     subdevice: &SubDevice,
 ) -> Result<Option<u16>, Error> {
     // No parent if we're first in the network, e.g. the EK1100 in the diagram above
+    // 第一个从站没有父节点
     if parents.is_empty() {
         return Ok(None);
     }
 
+    // iter().rev() 会创建一个反向迭代器 parents_it，从后往前遍历 parents 切片
     let mut parents_it = parents.iter().rev();
 
+    // 尝试从反向迭代器中获取下一个元素（即最后一个父设备）
     if let Some(parent) = parents_it.next() {
         // If the previous parent in the chain is a leaf node in the tree, we need to continue
         // iterating to find the common parent, i.e. the split point.
@@ -161,7 +177,10 @@ fn find_subdevice_parent(
         // Using the doc example above, say we're at #5, the previous device is #4 which is a
         // `LineEnd`. This means we traverse backwards until we find a `Fork` (the EK1100) and use
         // that as the parent.
+        // 如果上一个父节点是树中的叶节点，需要继续迭代以找到分叉点。
+        // 文档示例，假设我们现在位于 #5，上一个设备是 #4，它是一个 `LineEnd`。需要向后遍历，直到找到一个 `Fork`（EK1100）并将其用作父节点
         if parent.ports.topology() == Topology::LineEnd {
+            // 找到分叉节点或者交叉节点
             let split_point = parents_it
                 .find(|subdevice| subdevice.ports.topology().is_junction())
                 .ok_or_else(|| {
@@ -176,6 +195,7 @@ fn find_subdevice_parent(
             Ok(Some(split_point.index))
         }
         // Otherwise the parent is just the previous node in the tree
+        // 如果上一个父节点不是树中的叶节点，则它就是父节点
         else {
             Ok(Some(parent.index))
         }
@@ -189,12 +209,14 @@ fn find_subdevice_parent(
     }
 }
 
+// 打印从站设备（SubDevice）端口的调试信息，包括端口拓扑类型、各端口接收时间以及端口间接收时间的差值
 fn debug_print_ports(subdevice: &SubDevice) {
     let time_p0 = subdevice.ports.0[0].dc_receive_time;
     let time_p3 = subdevice.ports.0[1].dc_receive_time;
     let time_p1 = subdevice.ports.0[2].dc_receive_time;
     let time_p2 = subdevice.ports.0[3].dc_receive_time;
     // Deltas between port receive times
+    // saturating_sub 方法在结果为负数时会返回 0，避免了整数下溢的问题
     let d03 = time_p3.saturating_sub(time_p0);
     let d31 = time_p1.saturating_sub(time_p3);
     let d12 = time_p2.saturating_sub(time_p1);
@@ -217,10 +239,12 @@ fn debug_print_ports(subdevice: &SubDevice) {
         if subdevice.ports.0[3].active { d12 } else { 0 },
         // d12,
         time_p2,
+        // 计算从站4个端口最大和最小接收时间的差值，就是帧在从站之后网络传输的时间
         subdevice.ports.total_propagation_time().unwrap_or(0)
     );
 }
 
+// 计算传播延迟
 /// Calculate and assign a SubDevice's propagation delay, i.e. the time it takes for a packet to
 /// reach it when sent from the MainDevice.
 #[deny(clippy::arithmetic_side_effects)]
@@ -232,6 +256,7 @@ fn configure_subdevice_offsets(
     // Just for debug
     debug_print_ports(subdevice);
 
+    // 通过索引匹配出父从站
     let parent = subdevice
         .parent_index
         .and_then(|parent_index| parents.iter().find(|parent| parent.index == parent_index));
@@ -240,6 +265,7 @@ fn configure_subdevice_offsets(
         return;
     };
 
+    // 找到在当前从站里分配给指定从站的端口
     let parent_port = fmt::unwrap_opt!(
         parent.ports.port_assigned_to(subdevice),
         "Parent assigned port"
@@ -308,15 +334,21 @@ fn configure_subdevice_offsets(
     subdevice.propagation_delay = *delay_accum;
 }
 
+// 计算传播延迟
+// 没有考虑网线接反的情况？
 /// Assign parent/child relationships and compute propagation delays for all SubDevices.
 #[deny(clippy::arithmetic_side_effects)]
 fn assign_parent_relationships(subdevices: &mut [SubDevice]) -> Result<(), Error> {
+    // 用于累积从站设备的传播延迟
     let mut delay_accum = 0;
 
     for i in 0..subdevices.len() {
+        // 将 subdevices 切片在索引 i 处分割为两部分，parents 包含索引 i 之前的所有从站设备，rest 包含索引 i 及其之后的所有从站设备
         let (parents, rest) = subdevices.split_at_mut(i);
+        // 获取 rest 切片的第一个元素（即当前正在处理的从站设备）
         let subdevice = rest.first_mut().ok_or(Error::Internal)?;
 
+        // 查找与当前从站连接的前一个从站（父节点）
         subdevice.parent_index = find_subdevice_parent(parents, subdevice)?;
 
         fmt::debug!(
@@ -329,17 +361,22 @@ fn assign_parent_relationships(subdevices: &mut [SubDevice]) -> Result<(), Error
         // If this SubDevice has a parent, find it, then assign the parent's next open port to this
         // SubDevice, establishing the relationship between them by setting the SubDevice index on
         // the parent port.
+        // 如果此子设备有父设备，则找到它，并将父设备的下一个开放端口分配给此子设备，并通过在父端口上设置子设备索引来建立它们之间的关系。
         if let Some(parent_idx) = subdevice.parent_index {
+            // 在parents切片中找到当前从站的父从站
             let parent =
                 fmt::unwrap_opt!(parents.iter_mut().find(|parent| parent.index == parent_idx));
 
             fmt::unwrap_opt!(
+                // NonZeroU16 表示非零的 u16 值，若 subdevice.index 为 0 则返回 None，否则返回 Some(NonZeroU16)
                 NonZeroU16::new(subdevice.index)
+                    // 父从站入口端口的下一个开放端口和当前从站链接
                     .and_then(|index| parent.ports.assign_next_downstream_port(index)),
                 "no free ports on parent"
             );
         }
 
+        // 针对DC从站，计算传播延迟
         if subdevice.dc_support().any() {
             configure_subdevice_offsets(subdevice, parents, &mut delay_accum);
         } else {
@@ -351,8 +388,10 @@ fn assign_parent_relationships(subdevices: &mut [SubDevice]) -> Result<(), Error
     }
 
     // Extremely crude output to generate test cases with. `rustfmt` makes it look nice in the test.
-    #[cfg(feature = "std")]
+    #[cfg(feature = "std")] // 只有在启用 std 特性时，这部分代码才会被编译
+    // 检查 PRINT_TEST_CASE 环境变量是否被设置。若设置了该环境变量，代码块内的逻辑会被执行。
     if option_env!("PRINT_TEST_CASE").is_some() {
+        // 打印从站设备配置信息
         for subdevice in subdevices.iter() {
             let p = subdevice.ports.0;
 
@@ -387,6 +426,7 @@ fn assign_parent_relationships(subdevices: &mut [SubDevice]) -> Result<(), Error
             );
         }
 
+        // 打印从站设备拓扑信息
         for subdevice in subdevices.iter() {
             println!(
                 "// Index {}: {} ({:?})",
@@ -426,18 +466,26 @@ pub(crate) async fn configure_dc<'subdevices>(
     subdevices: &'subdevices mut [SubDevice],
     now: impl Fn() -> u64,
 ) -> Result<Option<&'subdevices SubDevice>, Error> {
+    // 获取每个DC从站的端口接收时间
+    // 只测量一次太粗糙了
     latch_dc_times(maindevice, subdevices).await?;
 
     assign_parent_relationships(subdevices)?;
 
+    // 查找第一个支持 DC 的从站
+    // 优化：开发接口允许指定参考时钟
     let first_dc_subdevice = subdevices
         .iter()
         .find(|subdevice| subdevice.dc_support().any());
 
     if let Some(first_dc_subdevice) = first_dc_subdevice.as_ref() {
+        // 获取当前时间（纳秒）
         let now_nanos = now();
 
+        // 对支持DC的从站，设置时钟偏移和传播延迟
+        // 非DC从站的行为会如何？
         for subdevice in subdevices.iter().filter(|sl| sl.dc_support().any()) {
+            // 设置时钟偏移和传播延迟
             write_dc_parameters(
                 maindevice,
                 subdevice,

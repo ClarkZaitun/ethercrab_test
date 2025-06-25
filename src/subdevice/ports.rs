@@ -277,22 +277,30 @@ impl Ports {
             .sum::<u32>()
     }
 
+    // 计算 EtherCAT 流量进入当前从站的入口端口，到指定端口的传播时间
     /// Get the propagation time taken from entry to this SubDevice up to the given port.
-    #[deny(clippy::arithmetic_side_effects)]
+    #[deny(clippy::arithmetic_side_effects)] // 禁止可能产生意外算术副作用（如整数溢出、下溢）的操作
     pub fn propagation_time_to(&self, this_port: &Port) -> Option<u32> {
+        // 获取当前设备中第一个接收到 EtherCAT 流量的端口，该端口是流量进入设备的入口
         let entry_port = self.entry_port();
 
         // Find active ports between entry and this one
+        // 返回map,其中包含各端口帧接收时间
         let times = self
             .active_ports()
+            // 只要端口的数组下标大于等于入口端口下标,小于等于指定端口下标的端口
+            // TODO:这个筛选规则是否合理?如果入口端口一定是0(不能适应网线反接的情况),则正确
+            // TODO:如果网线反接,则端口的数组应该设置为一个循环数组,这个判断规则需要修改
             .filter(|port| port.index() >= entry_port.index() && port.index() <= this_port.index())
             .map(|port| port.dc_receive_time);
 
         times
             .clone()
-            .max()
+            .max() // 在克隆的迭代器中查找最大的接收时间
+            // 若找到最大接收时间，再在原迭代器中查找最小接收时间
+            // 用最大接收时间减去最小接收时间得到传播时间，saturating_sub 确保减法结果不会为负数
             .and_then(|max| times.min().map(|min| max.saturating_sub(min)))
-            .filter(|t| *t > 0)
+            .filter(|t| *t > 0) // 筛选出传播时间大于 0 的结果，若传播时间为 0 则返回 None
     }
 }
 

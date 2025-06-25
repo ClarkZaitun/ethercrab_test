@@ -418,6 +418,7 @@ impl SubDevice {
     }
 
     // 检查当前子设备是否为“父设备”的子设备
+    // TODO: 判断方法还需要考证
     /// Check if the current SubDevice is a child of `parent`.
     ///
     /// A SubDevice is a child of a parent if it is connected to an intermediate port of the
@@ -431,11 +432,14 @@ impl SubDevice {
     pub(crate) fn is_child_of(&self, parent: &SubDevice) -> bool {
         // Only forks or crosses in the network can have child devices. Passthroughs only have
         // downstream devices.
+        // 作者将与直线型Passthroughs从站链接的从站定义为下游从站。分叉forks从站和交叉crosses从站才有子从站
+        // 从端口的角度看，分叉forks从站和交叉crosses从站增加的端口不一定是中间的端口
         let parent_is_fork = parent.ports.topology().is_junction();
 
         let parent_port = parent.ports.port_assigned_to(self);
 
         // Children in a fork must be connected to intermediate ports
+        // fork从站（forks和crosses） 中的子节点必须连接到中间端口？这是错误的说法。
         // 判断当前端口是否为从站的最后一个端口（ESC顺序）
         let child_attached_to_last_parent_port =
             parent_port.is_some_and(|child_port| parent.ports.is_last_port(child_port));

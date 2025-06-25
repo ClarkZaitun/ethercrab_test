@@ -165,7 +165,7 @@ pub enum RegisterAddress {
     /// NOTE: The spec defines this as a `UINT64`, however negative values are required sometimes
     /// and they work fine in practice, so I'm inclined to say this should actually be an `INT64`.
     // 注意：规范将其定义为“UINT64”，但有时需要负值并且它们在实践中工作良好，所以我倾向于说这实际上应该是“INT64”。
-    // 待考证
+    // TODO:待考证
     DcSystemTimeOffset = 0x0920,
     /// Transmission delay, `u32`.
     ///

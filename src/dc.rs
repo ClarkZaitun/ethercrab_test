@@ -256,7 +256,7 @@ fn configure_subdevice_offsets(
     // Just for debug
     debug_print_ports(subdevice);
 
-    // 通过索引匹配出父从站
+    // 通过从站中保存的父从站的索引匹配出父从站
     let parent = subdevice
         .parent_index
         .and_then(|parent_index| parents.iter().find(|parent| parent.index == parent_index));
@@ -265,15 +265,17 @@ fn configure_subdevice_offsets(
         return;
     };
 
-    // 找到在当前从站里分配给指定从站的端口
+    // 找到在父从站里分配给指定从站的端口
     let parent_port = fmt::unwrap_opt!(
         parent.ports.port_assigned_to(subdevice),
         "Parent assigned port"
     );
 
     // The port the MainDevice is connected to on this SubDevice. Must always be entry port.
+    // 获取当前设备中第一个接收到 EtherCAT 流量的端口，该端口是流量进入设备的入口
     let this_port = subdevice.ports.entry_port();
 
+    // TODO: 还原网络拓扑的方式需要再细看
     fmt::debug!(
         "--> Parent ({:?}) {} port {} assigned to {} port {} (SubDevice is child of parent: {:?})",
         parent.ports.topology(),
@@ -281,12 +283,14 @@ fn configure_subdevice_offsets(
         parent_port.number,
         subdevice.name(),
         this_port.number,
-        subdevice.is_child_of(parent)
+        subdevice.is_child_of(parent) // 检查当前子设备是否为“父设备”的子设备，判断方法还需要考证
     );
 
+    // 计算从站4个端口最大和最小接收时间的差值，就是帧在从站之后网络传输的时间
     let parent_prop_time = parent.ports.total_propagation_time().unwrap_or(0);
     let this_prop_time = subdevice.ports.total_propagation_time().unwrap_or(0);
 
+    // 帧在两个从站之间来回的总时间
     let parent_delta = parent_prop_time.saturating_sub(this_prop_time);
 
     fmt::debug!(
@@ -296,16 +300,21 @@ fn configure_subdevice_offsets(
         parent_delta
     );
 
+    // 不同拓扑计算传播延迟的公式不同
+    // 假设线缆延迟均匀，并且所有从站设备的处理和转发延迟一样
+    // TODO：需要再做功课确认
     // Divide by two here as the propagation times are for a loop, i.e. out _and back again_. We
     // only want one side of the loop.
     let propagation_delay = match parent.ports.topology() {
-        Topology::Passthrough => parent_delta / 2,
+        Topology::Passthrough => parent_delta / 2, //直接除2就是传播延迟
         Topology::Fork => {
             if subdevice.is_child_of(parent) {
+                // 计算 EtherCAT 流量进入当前从站的入口端口，到指定端口的传播时间
                 let children_loop_time = parent.ports.propagation_time_to(parent_port).unwrap_or(0);
 
                 children_loop_time.saturating_sub(this_prop_time) / 2
             } else {
+                // 当作Passthrough处理
                 parent_delta / 2
             }
         }
@@ -315,11 +324,14 @@ fn configure_subdevice_offsets(
 
                 children_loop_time.saturating_sub(this_prop_time) / 2
             } else {
+                // TODO
                 parent_prop_time.saturating_sub(*delay_accum)
             }
         }
         // A parent of any device cannot have a `LineEnd` topology as it will always have at
         // least 2 ports open (1 for comms to master, 1 to current SubDevice)
+        // 不可能发生的情况
+        // TODO：是否需要panic
         Topology::LineEnd => 0,
     };
 
@@ -334,7 +346,7 @@ fn configure_subdevice_offsets(
     subdevice.propagation_delay = *delay_accum;
 }
 
-// 计算传播延迟
+// 还原网络拓扑，计算传播延迟
 // 没有考虑网线接反的情况？
 /// Assign parent/child relationships and compute propagation delays for all SubDevices.
 #[deny(clippy::arithmetic_side_effects)]
@@ -470,6 +482,7 @@ pub(crate) async fn configure_dc<'subdevices>(
     // 只测量一次太粗糙了
     latch_dc_times(maindevice, subdevices).await?;
 
+    // 还原网络拓扑，计算传播延迟
     assign_parent_relationships(subdevices)?;
 
     // 查找第一个支持 DC 的从站

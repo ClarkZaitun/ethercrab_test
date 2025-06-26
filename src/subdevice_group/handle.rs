@@ -4,29 +4,35 @@ use crate::{
 
 /// A trait implemented only by [`SubDeviceGroup`] so multiple groups with different const params
 /// can be stored in a hashmap, `Vec`, etc.
-#[doc(hidden)]
-#[sealed::sealed]
+#[doc(hidden)] // 让此 trait 在生成的文档中隐藏，避免用户直接使用
+#[sealed::sealed] // 通过在定义trait和impl的地方前面添加这个宏，实现密封。如果impl该trait时没加宏，编译会报错
 pub trait SubDeviceGroupHandle: Sync {
+    // : Sync：trait bound，表明实现 SubDeviceGroupHandle 的类型必须同时实现 Sync trait。Sync 用于标记类型可以安全地在多个线程间共享引用，保证线程安全
     /// Get the group's ID.
+    // 不是原子变量
+    // 获取组ID
     fn id(&self) -> GroupId;
 
     /// Add a SubDevice device to this group.
+    // 添加一个从站到这个组
     unsafe fn push(&self, subdevice: SubDevice) -> Result<(), Error>;
 
     /// Get a reference to the group with const generic params erased.
     fn as_ref(&self) -> SubDeviceGroupRef<'_>;
 }
 
-#[sealed::sealed]
+#[sealed::sealed] // 保证 SubDeviceGroupHandle trait 只能由特定的类型实现，也就是 SubDeviceGroup 类型，从而限制了该 trait 的实现范围
 impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, S> SubDeviceGroupHandle
     for SubDeviceGroup<MAX_SUBDEVICES, MAX_PDI, S>
 where
     S: Sync,
 {
+    // 获取组ID
     fn id(&self) -> GroupId {
-        self.id
+        self.id // 不是原子变量，可以线程安全吗
     }
 
+    // 添加一个从站到这个组
     unsafe fn push(&self, subdevice: SubDevice) -> Result<(), Error> {
         unsafe { (*self.inner.get()).subdevices.push(subdevice) }
             .map_err(|_| Error::Capacity(crate::error::Item::SubDevice))

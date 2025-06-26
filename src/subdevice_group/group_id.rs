@@ -2,7 +2,9 @@
 #[doc(hidden)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GroupId(pub(in crate::subdevice_group) usize);
+// (...)：这是一个元组结构体，它只包含一个字段，元组结构体常用于给现有类型添加语义
 
+// From 是 Rust 标准库中的一个 trait，用于定义类型之间的转换逻辑。实现 From 后，还能自动获得 Into trait 的实现
 impl From<GroupId> for usize {
     fn from(value: GroupId) -> Self {
         value.0

@@ -10,6 +10,7 @@ pub struct MainDeviceConfig {
     /// Defaults to 10000.
     ///
     /// If this is set to zero, no static sync will be performed.
+    // 时钟漂移补偿默认做1000次。规范建议做15000次，越多启动时间就会被拖慢
     pub dc_static_sync_iterations: u32,
 
     /// EtherCAT packet (PDU) network retry behaviour.

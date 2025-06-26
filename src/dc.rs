@@ -539,6 +539,7 @@ pub(crate) async fn run_dc_static_sync(
     );
 
     for _ in 0..iterations {
+        // FRMW 0x0910
         Command::frmw(
             dc_reference_subdevice.configured_address(),
             RegisterAddress::DcSystemTime.into(),

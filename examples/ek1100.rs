@@ -34,6 +34,7 @@ const MAX_PDU_DATA: usize = PduStorage::element_size(1100); //1100+28
 /// Maximum number of EtherCAT frames that can be in flight at any one time.
 const MAX_FRAMES: usize = 16;
 /// Maximum total PDI length.
+// 组的过程数据映像（PDI）的最大字节数？
 const PDI_LEN: usize = 64;
 
 static PDU_STORAGE: PduStorage<MAX_FRAMES, MAX_PDU_DATA> = PduStorage::new();

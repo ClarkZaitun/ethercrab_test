@@ -41,6 +41,7 @@ pub struct MainDevice<'sto> {
     /// DC reference clock.
     ///
     /// If no DC subdevices are found, this will be `0`.
+    // 参考时钟的配置地址
     dc_reference_configured_address: AtomicU16,
     pub(crate) timeouts: Timeouts,
     pub(crate) config: MainDeviceConfig,
@@ -296,8 +297,10 @@ impl<'sto> MainDevice<'sto> {
         // compensation. We need the SubDevices in a single list so we can read the topology.
         // 配置分布时钟偏移/传播延迟，执行静态漂移补偿。我们需要将子设备放在一个列表中，以便读取拓扑结构。
         let dc_master = dc::configure_dc(self, subdevices.as_mut_slices().0, now).await?;
+        // 应该叫做参考时钟从站 Reference Clock Slave
 
         // If there are SubDevices that support distributed clocks, run static drift compensation
+        // 保存参考时钟地址到主站结构体中，进行时钟漂移补偿
         if let Some(dc_master) = dc_master {
             self.dc_reference_configured_address
                 .store(dc_master.configured_address(), Ordering::Relaxed);
@@ -306,9 +309,12 @@ impl<'sto> MainDevice<'sto> {
         }
 
         // This block is to reduce the lifetime of the groups map references
+        // 此块用于减少组映射引用的生命周期
         {
             // A unique list of groups so we can iterate over them and assign consecutive PDIs to each
             // one.
+            // 一个唯一的组列表，以便我们可以对它们进行迭代并为每个组分配连续的 PDI。
+            // 创建一个固定容量的映射表，用于存储组 ID 到组的映射
             let mut group_map = FnvIndexMap::<_, _, MAX_SUBDEVICES>::new();
 
             while let Some(subdevice) = subdevices.pop_front() {

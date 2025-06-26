@@ -34,6 +34,7 @@ pub use self::tx_rx_response::TxRxResponse;
 static GROUP_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// The size of a DC sync PDU.
+// 时间同步帧的数据报长度
 const DC_PDU_SIZE: usize = CreatedFrame::PDU_OVERHEAD_BYTES + u64::PACKED_LEN;
 
 // MSRV: Remove when core SyncUnsafeCell is stabilised
@@ -169,21 +170,31 @@ pub struct CycleInfo {
     pub cycle_start_offset: Duration,
 }
 
+// PDO域？
+// 这个库只允许通过组来访问从站PDO
 /// A group of one or more EtherCAT SubDevices.
 ///
 /// Groups are created during EtherCrab initialisation, and are the only way to access individual
 /// SubDevice PDI sections.
-#[doc(alias = "SlaveGroup")]
+#[doc(alias = "SlaveGroup")] // 为文档添加别名 SlaveGroup，这意味着在文档搜索时，输入 SlaveGroup 也能找到 SubDeviceGroup 的相关信息
 pub struct SubDeviceGroup<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, S = PreOp, DC = NoDc> {
+    // S = PreOp：一个类型参数，默认值为 PreOp；DC = NoDc：一个类型参数，默认值为 NoDc
+    // 组ID
     id: GroupId,
+    // 读写锁。spin::rwlock::RwLock 是一个自旋锁，它允许并发的读操作和独占的写操作
+    // MySyncUnsafeCell<[u8; MAX_PDI]> 是锁保护的数据，MySyncUnsafeCell 是自定义的类型，用于包装 UnsafeCell 并实现 Sync trait
+    // crate::SpinStrategy 是自旋锁的自旋策略
     pdi: spin::rwlock::RwLock<MySyncUnsafeCell<[u8; MAX_PDI]>, crate::SpinStrategy>,
     /// The number of bytes at the beginning of the PDI reserved for SubDevice inputs.
+    //  PDI数据区开头部分为从站输入数据预留的字节数；剩余字节数为输出数据的长度
     read_pdi_len: usize,
     /// The total length (I and O) of the PDI for this group.
+    // PDI数据区输入输出数据总字节数
     pdi_len: usize,
+    // PDI保存输入输出数据的内存块
     inner: MySyncUnsafeCell<GroupInner<MAX_SUBDEVICES>>,
-    dc_conf: DC,
-    _state: PhantomData<S>,
+    dc_conf: DC,            // 具体类型取决于结构体实例化时传入的类型
+    _state: PhantomData<S>, // PhantomData 是一个零大小类型，不占用实际内存空间，仅用于类型标记
 }
 
 impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, DC>

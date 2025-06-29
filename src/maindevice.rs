@@ -43,7 +43,7 @@ pub struct MainDevice<'sto> {
     /// If no DC subdevices are found, this will be `0`.
     // 参考时钟的配置地址
     dc_reference_configured_address: AtomicU16,
-    pub(crate) timeouts: Timeouts,
+    pub(crate) timeouts: Timeouts, // 用于确认从站状态切换到pre op的超时时间
     pub(crate) config: MainDeviceConfig,
 }
 
@@ -229,18 +229,22 @@ impl<'sto> MainDevice<'sto> {
     // 配置分布式时钟(DC)拓扑和同步
     // 使用提供的 group_filter 闭包将设备分配到不同组
     // 配置每个组的PDI(过程数据映像)偏移量
+    // 配置邮箱
     // 等待所有设备进入PRE-OP状态
     pub async fn init<const MAX_SUBDEVICES: usize, G>(
         &self,
         now: impl Fn() -> u64 + Copy,
         mut group_filter: impl for<'g> FnMut(
             //group_filter：分组过滤器闭包，用于决定每个从站设备分配到哪个组
-            &'g G,
+            // 如果要分为多组，则需要设置init函数的过滤器group_filter
+            // 哪里设置每个组的逻辑地址？
+            &'g G, // 传入闭包时已经指定了G的类型
             &SubDevice,
         ) -> Result<&'g dyn SubDeviceGroupHandle, Error>,
     ) -> Result<G, Error>
     where
         G: Default, //表示分组容器类型的泛型参数，必须实现 Default trait
+                    // 可以从调用这个函数的函数init_single_group的返回值推断出来G就是SubDeviceGroup吗？
     {
         let groups = G::default();
 
@@ -329,11 +333,15 @@ impl<'sto> MainDevice<'sto> {
                     .map_err(|_| Error::Capacity(Item::Group))?;
             }
 
+            // 默认为0？
             let mut offset = PdiOffset::default();
 
             for (id, group) in group_map.into_iter() {
                 let group = unsafe { *group.get() };
 
+                // 将 SubDeviceGroup 转换为 SubDeviceGroupRef 类型，同时擦除其常量泛型参数
+                // 初始化组内的所有从设备（SubDevice），并将它们置于 PRE-OP状态，同时配置组内从设备在过程数据映像（PDI）中的映射。这里会修改pdi_position的start_address
+                // 通过EEOROM数据配置邮箱，切换到PreOp，读取对象字典中的0x1c00同步管理器类型，保存邮箱配置
                 offset = group.as_ref().into_pre_op(offset, self).await?;
 
                 fmt::debug!("After group ID {} offset: {:?}", id, offset);
@@ -343,6 +351,7 @@ impl<'sto> MainDevice<'sto> {
         }
 
         // Check that all SubDevices reached PRE-OP
+        // 等待所有从站切换到指定状态，如果出现故障则打印错误码，返回
         self.wait_for_state(SubDeviceState::PreOp).await?;
 
         Ok(groups)
@@ -430,7 +439,7 @@ impl<'sto> MainDevice<'sto> {
     /// # Ok::<(), ethercrab::error::Error>(())
     /// # };
     /// ```
-    //快速创建一个包含所有已发现从站设备的单一组
+    // 快速创建一个包含所有已发现从站设备的单一组
     pub async fn init_single_group<const MAX_SUBDEVICES: usize, const MAX_PDI: usize>(
         &self,
         now: impl Fn() -> u64 + Copy,
@@ -465,11 +474,13 @@ impl<'sto> MainDevice<'sto> {
     }
 
     /// Wait for all SubDevices on the network to reach a given state.
+    // 等待所有从站切换到指定状态，如果出现故障则打印错误码，返回
     pub async fn wait_for_state(&self, desired_state: SubDeviceState) -> Result<(), Error> {
         let num_subdevices = self.num_subdevices.load(Ordering::Relaxed);
 
         async {
             loop {
+                // BRD 0x0130 读取状态
                 let status = Command::brd(RegisterAddress::AlStatus.into())
                     .with_wkc(num_subdevices)
                     .receive::<AlControl>(self)
@@ -477,12 +488,14 @@ impl<'sto> MainDevice<'sto> {
 
                 fmt::trace!("Global AL status {:?}", status);
 
+                // 如果状态切换出错
                 if status.error {
                     fmt::error!(
                         "Error occurred transitioning all SubDevices to {:?}",
                         desired_state,
                     );
 
+                    // FPRD 0x0134 读取每个从站的故障码，打印
                     for subdevice_addr in BASE_SUBDEVICE_ADDRESS
                         ..(BASE_SUBDEVICE_ADDRESS + self.num_subdevices() as u16)
                     {
@@ -507,6 +520,7 @@ impl<'sto> MainDevice<'sto> {
                     break Ok(());
                 }
 
+                // TODO：这个超时时间应该单独一个
                 self.timeouts.loop_tick().await;
             }
         }

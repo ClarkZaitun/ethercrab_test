@@ -141,6 +141,7 @@ where
     P: EepromDataProvider,
 {
     // 从 EepromRange 读取指定区间的数据
+    // 会修改EepromRange中的起始地址byte_pos
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         fmt::trace!("Read EEPROM chunk from byte {:#06x}", self.byte_pos);
 

@@ -4,6 +4,7 @@ pub const SM_TYPE_ADDRESS: u16 = 0x1c00;
 /// // ETG1000.6 Table 67 – CoE Communication Area, the address of the first sync manager.
 pub const SM_BASE_ADDRESS: u16 = 0x1c10;
 
+// SM寄存器。0x0800:0x0807
 /// Sync manager channel.
 ///
 /// Defined in ETG1000.4 6.7.2
@@ -20,7 +21,7 @@ pub struct SyncManagerChannel {
     #[wire(bytes = 1)]
     pub status: Status,
     #[wire(bytes = 2)]
-    pub enable: Enable,
+    pub enable: Enable, // 应该分为“激活”和“PDI控制”寄存器？
 }
 
 impl core::fmt::Debug for SyncManagerChannel {

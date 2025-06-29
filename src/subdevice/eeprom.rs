@@ -31,6 +31,7 @@ where
     }
 
     // 创建EEPROM 提供者的抽象，仅允许读取或写入特定范围字节
+    // EEPROM前128字节固定位置，可以直接给定区间。128字节后面的类别需要通过类型来查找
     /// Start a reader at the given address in words, returning at most `len` bytes.
     pub(crate) fn start_at(&self, word_addr: u16, len_bytes: u16) -> EepromRange<P> {
         EepromRange::new(self.provider.clone(), word_addr, len_bytes / 2)
@@ -240,9 +241,11 @@ where
         self.find_string(general.name_string_idx).await
     }
 
+    // 读取EEPROM中的标准邮箱区域
     pub(crate) async fn mailbox_config(&self) -> Result<DefaultMailbox, Error> {
         // Start reading standard mailbox config. Raw start address defined in ETG2010 Table 2.
         // Mailbox config is 10 bytes long.
+        // EEPROM标准邮箱区域，0x0018字开始，10字节
         let mut reader = self.start_at(0x0018, DefaultMailbox::PACKED_LEN as u16);
 
         fmt::trace!("Get mailbox config");
@@ -292,14 +295,23 @@ where
         Ok(SubDeviceIdentity::unpack_from_slice(&buf)?)
     }
 
+    // 读取EEPROM中的SM区,得到SM数组
     pub(crate) async fn sync_managers(&self) -> Result<heapless::Vec<SyncManager, 8>, Error> {
+        // 创建一个容量为 8 的 heapless::Vec
         let mut sync_managers = heapless::Vec::<_, 8>::new();
 
         fmt::trace!("Get sync managers");
 
+        // 调用 self.items::<SyncManager>(CategoryType::SyncManager) 方法，该方法会在 EEPROM 里搜索 SyncManager 类别
         let mut cat = self.items::<SyncManager>(CategoryType::SyncManager).await?;
+        // 为什么加::？::<SyncManager> 是 turbofish 语法，也被叫做尖括号语法
+        // turbofish 语法的主要作用是显式指定泛型函数或者泛型类型的类型参数。
+        // 在 Rust 里，很多时候编译器能依据上下文自动推断泛型参数的类型，但某些场景下，编译器没办法进行准确推断，或者开发者希望明确指定类型，这时就需要用到 turbofish 语法
 
+        // 不断调用 cat.next().await? 从 CategoryIterator 里获取下一个 SyncManager 实例，若获取成功，尝试将其添加到 sync_managers 向量中
+        // SyncManager类别区间包含n个SM数据，长度就是8n，每次读取8字节
         while let Some(sm) = cat.next().await? {
+            // TODO:这里应该加上SM通道的数量限制
             sync_managers
                 .push(sm)
                 .map_err(|_| Error::Capacity(Item::SyncManager))?;
@@ -509,6 +521,7 @@ where
         }
     }
 
+    // 搜索给定category类别，返回CategoryIterator迭代器
     pub(crate) async fn items<T>(
         &self,
         category: CategoryType,
@@ -516,6 +529,7 @@ where
     where
         T: EtherCrabWireReadSized,
     {
+        // 搜索给定category类别，如果找到该类别，返回EepromRange：匹配的category类型的数据区（字地址和长度）
         let Some(reader) = self.category(category).await? else {
             return Ok(CategoryIterator::new(EepromRange::new(
                 self.provider.clone(),
@@ -529,8 +543,10 @@ where
 }
 
 pub struct CategoryIterator<P, T> {
-    reader: EepromRange<P>,
-    item: PhantomData<T>,
+    reader: EepromRange<P>, // EEPROM数据范围
+    item: PhantomData<T>, // PhantomData是Rust 标准库中的一个零大小类型（ZST），它不占用任何内存空间
+                          // 这里引入 PhantomData<T> 是因为 CategoryIterator 虽然在逻辑上和 T 类型有关（用于迭代 T 类型的数据项），但结构体本身并没有实际存储 T 类型的值。
+                          // PhantomData<T> 起到标记作用，告诉编译器 CategoryIterator 和 T 类型相关，有助于类型检查和泛型约束
 }
 
 impl<P, T> CategoryIterator<P, T>
@@ -545,16 +561,19 @@ where
         }
     }
 
+    // 从 EEPROM 里的特定类别区域逐个读取 T 类型的项
     pub async fn next(&mut self) -> Result<Option<T>, Error> {
+        // 创建长度为8的buff
         let mut buf = T::buffer();
 
         match self.reader.read_exact(buf.as_mut()).await {
             // Reached end of category
-            Err(ReadExactError::UnexpectedEof) => return Ok(None),
+            Err(ReadExactError::UnexpectedEof) => return Ok(None), // 若遇到 UnexpectedEof 错误，意味着已到达类别区域末尾，此时返回 Ok(None)
             Err(ReadExactError::Other(e)) => return Err(e),
-            Ok(()) => (),
+            Ok(()) => (), // 若读取成功，继续执行后续代码
         }
 
+        // 反序列化：从字节缓冲区解析数据
         Ok(Some(T::unpack_from_slice(buf.as_ref())?))
     }
 

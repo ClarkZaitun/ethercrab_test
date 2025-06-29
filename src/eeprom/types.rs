@@ -461,6 +461,7 @@ impl EtherCrabWireRead for CoeDetails {
     }
 }
 
+// EEPROM中SM区域，8字节
 #[derive(Copy, Clone, PartialEq, Eq, ethercrab_wire::EtherCrabWireRead)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[wire(bytes = 8)]
@@ -471,6 +472,7 @@ pub struct SyncManager {
     pub(crate) length: u16,
     #[wire(bytes = 1, post_skip_bytes = 1)]
     pub(crate) control: sync_manager_channel::Control,
+    // 跳过状态寄存器
     #[wire(bytes = 1)]
     pub(crate) enable: SyncManagerEnable,
     /// Usage type.
@@ -482,10 +484,13 @@ pub struct SyncManager {
 }
 
 impl SyncManager {
+    // 确定 SyncManager 的使用类型；若 usage_type 未知，通过其他字段推断类型
     pub(crate) fn usage_type(&self) -> SyncManagerType {
         if self.usage_type != SyncManagerType::Unknown {
             self.usage_type
         } else {
+            // 若 usage_type 未知，通过其他字段推断类型
+            // 此处应该有日志信息输出
             // Try to recover type by matching on other fields in the SM
             match (self.control.operation_mode, self.control.direction) {
                 (OperationMode::Normal, Direction::MasterRead) => SyncManagerType::ProcessDataRead,
@@ -550,7 +555,7 @@ impl defmt::Format for SyncManagerEnable {
     }
 }
 
-// 来自EEPROM的SM配置
+// 来自EEPROM的SM配置，字节地址0x0007
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, ethercrab_wire::EtherCrabWireRead)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
@@ -778,6 +783,7 @@ impl defmt::Format for MailboxProtocols {
     }
 }
 
+// EEPROM标准邮箱区域，0x0018字开始，10字节
 #[derive(Copy, Clone, Default, PartialEq, ethercrab_wire::EtherCrabWireRead)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[wire(bytes = 10)]
@@ -800,6 +806,7 @@ pub struct DefaultMailbox {
 }
 
 impl DefaultMailbox {
+    // 确认支持邮箱
     pub fn has_mailbox(&self) -> bool {
         !self.supported_protocols.is_empty() && self.subdevice_receive_size > 0
             || self.subdevice_send_size > 0

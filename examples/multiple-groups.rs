@@ -33,8 +33,11 @@ struct Groups {
     ///
     /// We'll keep the EK1100/EK1501 in here as it has no useful PDI but still needs to live
     /// somewhere.
+    // 用于管理 EL2889 以及 EK1100 或 EK1501 设备。对于 EK1100，有 2 个设备项，过程数据映像（PDI）为 2 字节，对应 16 个输出位；EK1501 自身有 2 字节的 PDI，因此将 PDI 上限设为 4 字节。
+    // 虽然 EK1100 和 EK1501 没有实际有用的 PDI，但仍需将它们归到某个组中。
     slow_outputs: SubDeviceGroup<2, 4>,
     /// EL2828. 1 item, 1 byte of PDI for 8 output bits.
+    // 用于管理 EL2828 设备，该组包含 1 个设备项，PDI 为 1 字节，对应 8 个输出位
     fast_outputs: SubDeviceGroup<1, 1>,
 }
 
@@ -83,6 +86,8 @@ async fn main() -> Result<(), Error> {
     let maindevice = Arc::new(maindevice);
 
     // Read configurations from SubDevice EEPROMs and configure devices.
+    // 如果要分为多组，则需要设置init函数的过滤器group_filter
+    // 返回值为多个组
     let groups = maindevice
         .init::<MAX_SUBDEVICES, _>(ethercat_now, |groups: &Groups, subdevice| {
             match subdevice.name() {

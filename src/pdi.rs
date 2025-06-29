@@ -20,6 +20,7 @@ impl PdiOffset {
         self.increment_inner(0, inc_bytes)
     }
 
+    // start_address 增加 bytes字节
     pub fn increment(self, bytes: u16) -> Self {
         self.increment_inner(0, bytes)
     }

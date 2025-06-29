@@ -223,6 +223,7 @@ impl<'sto> CreatedFrame<'sto> {
         )))
     }
 
+    // 检查帧剩余空间是否能插入给定长度的数据
     pub(crate) fn can_push_pdu_payload(&self, packed_len: usize) -> bool {
         let alloc_size = packed_len + Self::PDU_OVERHEAD_BYTES;
 

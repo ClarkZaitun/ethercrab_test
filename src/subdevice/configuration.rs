@@ -25,15 +25,22 @@ where
     ///
     /// Continue configuration by calling
     /// [`configure_fmmus`](crate::SubDeviceGroup::configure_fmmus).
+    // 通过EEOROM数据配置邮箱，切换到PreOp，读取对象字典中的0x1c00同步管理器类型，保存邮箱配置
     pub(crate) async fn configure_mailboxes(&mut self) -> Result<(), Error> {
         // Force EEPROM into master mode. Some SubDevices require PDI mode for INIT -> PRE-OP
         // transition. This is mentioned in ETG2010 p. 146 under "Eeprom/@AssignToPd". We'll reset
         // to master mode here, now that the transition is complete.
+        // 某些子设备需要 PDI 模式才能进行 INIT -> PRE-OP 转换。这在ETG2010第 146 页的“Eeprom/@AssignToPd”中提到。现在过渡已完成，我们将在此处重置为主站模式。
+        // 设置EEPROM访问为主站
         self.set_eeprom_mode(SiiOwner::Master).await?;
 
+        // 读取EEPROM中的SM区,得到SM数组
+        // 这里重新创建了一个SubDeviceEeprom
+        // 可优化：EEPROM统一读取，之后如果需要更新再更新
         let sync_managers = self.eeprom().sync_managers().await?;
 
         // Mailboxes must be configured in INIT state
+        // 配置SM0和SM1给邮箱。会检查是否支持邮箱，不支持就不配置。生成邮箱的配置信息保存到从站
         self.configure_mailbox_sms(&sync_managers).await?;
 
         // Some SubDevices must be in PDI EEPROM mode to transition from INIT to PRE-OP. This is
@@ -45,16 +52,20 @@ where
             self.configured_address
         );
 
+        // 切换到PreOp
         self.request_subdevice_state(SubDeviceState::PreOp).await?;
 
         if self.state.config.mailbox.has_coe {
             // TODO: Abstract this no-complete-access check into a method call so we can reuse it.
             // CA is currently only used here inside EtherCrab, but may need to be used in other
             // places eventually.
+            // 依据是否支持完全访问（Complete Access）读取对象字典中的0x1c00同步管理器类型
+            // TODO：是否和EEPROM中标准邮箱区域字节地址0x0007重复了
+            // 完全访问（Complete Access）是SDO数据控制字节的一个标志位
             let sms = if self.state.config.mailbox.complete_access {
                 // Up to 16 sync managers as per ETG1000.4 Table 59
                 self.sdo_read::<heapless::Vec<SyncManagerType, 16>>(
-                    SM_TYPE_ADDRESS,
+                    SM_TYPE_ADDRESS, // 0x1c00
                     SubIndex::Complete,
                 )
                 .await?
@@ -173,12 +184,14 @@ where
         Ok(global_offset)
     }
 
+    // 根据传入的SM索引和EEPROM的数据，设置对应SM寄存器
     async fn write_sm_config(
         &self,
         sync_manager_index: u8,
         sync_manager: &SyncManager,
         length_bytes: u16,
     ) -> Result<SyncManagerChannel, Error> {
+        // 从EEPROM数据生成SM寄存器的值
         let sm_config = SyncManagerChannel {
             physical_start_address: sync_manager.start_addr,
             // Bit length, rounded up to the nearest byte
@@ -191,6 +204,7 @@ where
             },
         };
 
+        // FPWR 0x0800+8*sync_manager_index
         self.write(RegisterAddress::sync_manager(sync_manager_index))
             .send(self.maindevice, &sm_config)
             .await?;
@@ -206,13 +220,16 @@ where
         Ok(sm_config)
     }
 
+    // 配置SM0和SM1给邮箱。会检查是否支持邮箱，不支持就不配置。生成邮箱的配置信息保存到从站
+    // 这里重复读取了general Category
+    // TODO：16个SM通道，是否可能其他通道也作为邮箱SM？
     /// Configure SM0 and SM1 for mailbox communication.
     async fn configure_mailbox_sms(&mut self, sync_managers: &[SyncManager]) -> Result<(), Error> {
         let eeprom = self.eeprom();
 
         // Read default mailbox configuration from SubDevice information area
         let mailbox_config = eeprom
-            .mailbox_config()
+            .mailbox_config() // 读取EEPROM中的标准邮箱区域
             .await
             .ignore_no_category()?
             .unwrap_or_else(|| {
@@ -225,7 +242,7 @@ where
             });
 
         let general = eeprom
-            .general()
+            .general() // 读取general Category
             .await
             .ignore_no_category()?
             .unwrap_or_else(|| {
@@ -243,6 +260,7 @@ where
             mailbox_config
         );
 
+        // 确认支持邮箱，不支持则退出
         if !mailbox_config.has_mailbox() {
             fmt::trace!(
                 "SubDevice {:#06x} has no valid mailbox configuration",
@@ -259,8 +277,10 @@ where
             let sync_manager_index = sync_manager_index as u8;
 
             // Mailboxes are configured in INIT state
+            // 确定 SyncManager 的使用类型；若 usage_type 未知，通过其他字段推断类型
             match sync_manager.usage_type() {
                 SyncManagerType::MailboxWrite => {
+                    // 根据传入的SM索引和EEPROM的数据，设置对应SM寄存器
                     self.write_sm_config(
                         sync_manager_index,
                         sync_manager,

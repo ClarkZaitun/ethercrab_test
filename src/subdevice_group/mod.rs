@@ -38,10 +38,12 @@ static GROUP_ID: AtomicUsize = AtomicUsize::new(0);
 const DC_PDU_SIZE: usize = CreatedFrame::PDU_OVERHEAD_BYTES + u64::PACKED_LEN;
 
 // MSRV: Remove when core SyncUnsafeCell is stabilised
+// MySyncUnsafeCell封装标准库中的 UnsafeCell
 #[derive(Debug)]
 pub(crate) struct MySyncUnsafeCell<T: ?Sized>(pub UnsafeCell<T>);
 
 impl<T> MySyncUnsafeCell<T> {
+    // 构造函数
     pub fn new(inner: T) -> Self {
         Self(UnsafeCell::new(inner))
     }
@@ -57,6 +59,8 @@ impl<T: ?Sized> MySyncUnsafeCell<T> {
     /// when casting to `&mut T`, and ensure that there are no mutations
     /// or mutable aliases going on when casting to `&T`
     #[inline]
+    // 返回一个指向包装值的可变原始指针 *mut T
+    // 当将该指针转换为 &mut T 时，要确保访问是唯一的（没有其他活跃的引用）；转换为 &T 时，要确保没有突变或可变别名。
     pub const fn get(&self) -> *mut T {
         self.0.get()
     }
@@ -66,6 +70,8 @@ impl<T: ?Sized> MySyncUnsafeCell<T> {
     /// This call borrows the `SyncUnsafeCell` mutably (at compile-time) which
     /// guarantees that we possess the only reference.
     #[inline]
+    // 接收 self 的可变引用，返回一个指向底层数据的可变引用 &mut T
+    // 由于函数参数是 &mut self，Rust 编译器会保证此时只有一个引用，避免数据竞争。
     pub fn get_mut(&mut self) -> &mut T {
         self.0.get_mut()
     }
@@ -200,6 +206,7 @@ pub struct SubDeviceGroup<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, S =
 impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, DC>
     SubDeviceGroup<MAX_SUBDEVICES, MAX_PDI, PreOp, DC>
 {
+    // 配置FMMU
     /// Configure read/write FMMUs and PDI for this group.
     async fn configure_fmmus(&mut self, maindevice: &MainDevice<'_>) -> Result<(), Error> {
         let inner = self.inner.get_mut();
@@ -287,6 +294,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, DC>
         ))
     }
 
+    // 从pre op切换到op
     /// Transition the group from PRE-OP -> SAFE-OP -> OP.
     ///
     /// To transition individually from PRE-OP to SAFE-OP, then SAFE-OP to OP, see
@@ -300,6 +308,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, DC>
         self_.into_op(maindevice).await
     }
 
+    // 配置FMMU
     /// Configure FMMUs, but leave the group in [`PreOp`] state.
     ///
     /// This method is used to obtain access to the group's PDI and related functionality. All SDO
@@ -327,10 +336,12 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, DC>
         self,
         maindevice: &MainDevice<'_>,
     ) -> Result<SubDeviceGroup<MAX_SUBDEVICES, MAX_PDI, SafeOp, DC>, Error> {
+        // 设置FMMU
         let self_ = self.into_pre_op_pdi(maindevice).await?;
 
         // We're done configuring FMMUs, etc, now we can request all SubDevices in this group go into
         // SAFE-OP
+        // 请求切换到safe op
         self_
             .transition_to(maindevice, SubDeviceState::SafeOp)
             .await
@@ -555,6 +566,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, DC>
         self,
         maindevice: &MainDevice<'_>,
     ) -> Result<SubDeviceGroup<MAX_SUBDEVICES, MAX_PDI, Op, DC>, Error> {
+        // 请求切换到op状态
         self.transition_to(maindevice, SubDeviceState::Op).await
     }
 
@@ -641,6 +653,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, S, DC>
         self.inner().subdevices.is_empty()
     }
 
+    // 检查组里的所有从站是否在预期状态。只检查一次，如果失败返回false
     /// Check if all SubDevices in the group are the given desired state.
     async fn is_state(
         &self,
@@ -654,11 +667,16 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, S, DC>
         let mut total_checks = 0;
 
         // Send as many frames as required to check statuses of all subdevices
+        // 发一个帧，等待返回后才会发下一个帧
+        // TODO：应该是所有从站的数据发送后，再统一检查
         loop {
+            // 从预分配的帧存储池中找到一个可用的帧，并将其标记为"已创建"状态，以便后续用于发送 PDU 数据
             let mut frame = maindevice.pdu_loop.alloc_frame()?;
 
+            // 在帧里插入检查状态的数据报，返回剩余未检查状态的从站数组和已检查的从站数
             let (rest, num_in_this_frame) = push_state_checks(subdevices, &mut frame)?;
 
+            // 刷新待检查状态的从站数组
             subdevices = rest;
 
             // Nothing to send, we've checked all SDs
@@ -670,19 +688,25 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, S, DC>
 
             total_checks += num_in_this_frame;
 
+            // 帧设置为可发送状态Sendable，返回一个 Future，当收到对已发送帧的响应时，该 Future 将被执行。
+            // TODO：重试次数
             let frame = frame.mark_sendable(
                 &maindevice.pdu_loop,
                 maindevice.timeouts.pdu,
                 maindevice.config.retry_behaviour.retry_count(),
             );
 
+            // 唤醒Tx任务
             maindevice.pdu_loop.wake_sender();
 
+            // 帧返回
             let received = frame.await?;
 
+            // 转换为数据报迭代器
             for pdu in received.into_pdu_iter() {
                 let pdu = pdu?;
 
+                // 解析出0x0130寄存器值
                 let result = AlControl::unpack_from_slice(&pdu)?;
 
                 // Return from this fn as soon as the first undesired state is found
@@ -698,6 +722,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, S, DC>
         Ok(true)
     }
 
+    // 持续检查从站是否在预期状态，要么超时，要么报错
     /// Wait for all SubDevices in this group to transition to the given state.
     async fn wait_for_state(
         &self,
@@ -706,6 +731,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, S, DC>
     ) -> Result<(), Error> {
         async {
             loop {
+                // 检查组里的所有从站是否在预期状态。只检查一次，如果失败返回false
                 if self.is_state(maindevice, desired_state).await? {
                     break Ok(());
                 }
@@ -717,6 +743,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, S, DC>
         .await
     }
 
+    // 切换状态到safe op或者op
     /// Transition to a new state.
     async fn transition_to<TO>(
         mut self,
@@ -727,12 +754,13 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, S, DC>
         // SAFE-OP
         for subdevice in self.inner.get_mut().subdevices.iter_mut() {
             SubDeviceRef::new(maindevice, subdevice.configured_address(), subdevice)
-                .request_subdevice_state_nowait(desired_state)
+                .request_subdevice_state_nowait(desired_state) // 请求从站状态切换，如果有故障读取故障码并打印
                 .await?;
         }
 
         fmt::debug!("Waiting for group state {}", desired_state);
 
+        // 持续检查从站是否在预期状态，要么超时，要么报错
         self.wait_for_state(maindevice, desired_state).await?;
 
         fmt::debug!("--> Group reached state {}", desired_state);
@@ -749,6 +777,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, S, DC>
     }
 }
 
+// 在帧里插入检查状态的数据报，返回剩余未检查状态的从站数组和已检查的从站数
 fn push_state_checks<'group, 'sto, I>(
     mut subdevices: I,
     frame: &mut CreatedFrame<'sto>,
@@ -758,13 +787,16 @@ where
 {
     let mut num_in_this_frame = 0;
 
+    // 检查帧剩余空间是否能插入2字节（0x0130寄存器长度）的数据
     while frame.can_push_pdu_payload(AlControl::PACKED_LEN) {
+        // 从从站数组中获取一个从站
         let Some(sd) = subdevices.next() else {
             break;
         };
 
         // A too-long error here should be unreachable as we check if the payload can be
         // pushed in the loop condition.
+        // 插入FPRD 0x0130
         frame.push_pdu(
             Command::fprd(sd.configured_address(), RegisterAddress::AlStatus.into()).into(),
             (),

@@ -148,6 +148,7 @@ impl<'sto> ReceivedFrame<'sto> {
         })
     }
 
+    // 转换为数据报迭代器
     pub fn into_pdu_iter(self) -> ReceivedPduIter<'sto> {
         ReceivedPduIter {
             frame: self,

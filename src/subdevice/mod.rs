@@ -544,6 +544,7 @@ where
         self.state.dc_sync
     }
 
+    // 产生邮箱计数
     /// Return the current cyclic mailbox counter value, from 0-7.
     ///
     /// Calling this method internally increments the counter, so subequent calls will produce a new
@@ -1006,6 +1007,7 @@ where
         let mut storage = T::buffer();
         let buf = storage.as_mut();
 
+        // SDO上传
         let request = coe::services::upload(self.mailbox_counter(), index, sub_index);
 
         fmt::trace!("CoE upload {:#06x} {:?}", index, sub_index);
@@ -1015,6 +1017,7 @@ where
 
         // Expedited transfers where the data is 4 bytes or less long, denoted in the SDO header
         // size value.
+        // 快速传输
         let response_payload = if headers.sdo_header.expedited_transfer {
             let data_len = 4usize.saturating_sub(usize::from(headers.sdo_header.size));
 
@@ -1103,6 +1106,7 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
         maindevice: &'maindevice MainDevice<'maindevice>,
         configured_address: u16,
         state: S, // S 的类型由传入的 state 参数自动推断
+                  // 可能类型为 SubDevice
     ) -> Self {
         Self {
             maindevice,
@@ -1211,6 +1215,7 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
         Command::fprd(self.configured_address, register.into())
     }
 
+    // 请求从站状态切换，如果有故障读取故障码并打印
     pub(crate) async fn request_subdevice_state_nowait(
         &self,
         desired_state: SubDeviceState,
@@ -1222,14 +1227,16 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
         );
 
         // Send state request
+        // FPWR 0x0130 请求状态切换
         let response = self
             .write(RegisterAddress::AlControl)
             .send_receive::<AlControl>(self.maindevice, AlControl::new(desired_state))
             .await?;
 
+        // 检查是否存在故障，如果有则读取故障码 FPRD 0x0134
         if response.error {
             let error = self
-                .read(RegisterAddress::AlStatus)
+                .read(RegisterAddress::AlStatus) // TODO：这里应该是个bug，应该写AlStatusCode
                 .receive::<AlStatusCode>(self.maindevice)
                 .await?;
 

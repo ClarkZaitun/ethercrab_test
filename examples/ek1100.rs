@@ -87,7 +87,7 @@ async fn main() -> Result<(), Error> {
     #[cfg(not(target_os = "windows"))]
     tokio::spawn(ethercrab::std::tx_rx_task(&interface, tx, rx).expect("spawn TX/RX task"));
 
-    // 此方法将请求并等待所有子设备处于“PRE-OP”状态后再返回。
+    // 请求并等待所有子设备处于“PRE-OP”状态后再返回。只返回一个组
     let group = maindevice
         .init_single_group::<MAX_SUBDEVICES, PDI_LEN>(ethercat_now)
         .await
@@ -95,10 +95,13 @@ async fn main() -> Result<(), Error> {
 
     log::info!("Discovered {} SubDevices", group.len());
 
+    // 对每个从站配置PDO
     for subdevice in group.iter(&maindevice) {
+        // 改为匹配vendor id和product code更合理
         if subdevice.name() == "EL3004" {
             log::info!("Found EL3004. Configuring...");
 
+            // 配置PDO
             subdevice.sdo_write(0x1c12, 0, 0u8).await?;
 
             subdevice
@@ -115,6 +118,7 @@ async fn main() -> Result<(), Error> {
         }
     }
 
+    // 从pre op切换到op
     let group = group.into_op(&maindevice).await.expect("PRE-OP -> OP");
 
     for subdevice in group.iter(&maindevice) {

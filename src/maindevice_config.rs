@@ -14,6 +14,7 @@ pub struct MainDeviceConfig {
     pub dc_static_sync_iterations: u32,
 
     /// EtherCAT packet (PDU) network retry behaviour.
+    //默认值是RetryBehaviour::None
     pub retry_behaviour: RetryBehaviour,
 }
 // Default 是标准库 std::default 模块定义的一个 trait，其作用是为类型提供默认值。若某个类型实现了 Default trait，就能够借助 Default::default() 方法或者 T::default() 语法获取该类型的默认实例

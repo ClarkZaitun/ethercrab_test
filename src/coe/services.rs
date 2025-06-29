@@ -159,6 +159,7 @@ pub fn upload_segmented(counter: u8, toggle: bool) -> SdoSegmented {
     }
 }
 
+// SDO上传
 pub fn upload(counter: u8, index: u16, access: SubIndex) -> SdoNormal {
     SdoNormal {
         header: MailboxHeader {

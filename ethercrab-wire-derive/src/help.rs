@@ -113,24 +113,54 @@ pub fn attr_exists(attrs: &[syn::Attribute], search: &str) -> bool {
     false
 }
 
+/// 检查结构体或枚举是否具有 `#[repr(packed)]` 属性
+///
+/// 此函数用于在过程宏展开过程中验证类型是否使用了 `#[repr(packed)]` 内存布局属性。
+/// 在处理需要精确内存布局的类型（如网络协议数据结构）时，这是一个重要的检查，
+/// 因为 `#[repr(packed)]` 会移除字段间的填充字节，确保类型的内存布局紧凑。
+///
+/// # 参数
+/// * `attrs` - 目标类型的所有属性列表，通常通过 `syn::DeriveInput::attrs` 获取
+///
+/// # 返回值
+/// * `true` - 如果找到 `#[repr(packed)]` 属性
+/// * `false` - 如果未找到 `#[repr(packed)]` 属性
+///
+/// # 实现细节
+/// 函数通过以下步骤工作：
+/// 1. 遍历类型的所有属性
+/// 2. 寻找路径为 "repr" 的属性列表（`#[repr(...)]`）
+/// 3. 解析 `repr` 属性的嵌套元数据，检查是否包含 "packed" 标识符
+/// 4. 如果找到 "packed"，立即返回 true；否则继续查找或最终返回 false
 pub fn has_repr_packed(attrs: &[syn::Attribute]) -> bool {
+    // 遍历所有属性，查找 repr 属性
     for attr in attrs {
         match attr.meta.clone() {
+            // 匹配形式为 `#[repr(...)]` 的属性列表
             Meta::List(l) if l.path.is_ident("repr") => {
+                // 初始化标记变量，用于追踪是否找到 packed 关键字
                 let mut has_packed = false;
+
+                // 解析 repr 内部的嵌套元数据
+                // 忽略可能的解析错误，继续处理
                 let _ = l.parse_nested_meta(|meta| {
+                    // 检查元数据是否为 "packed" 标识符
                     if meta.path.is_ident("packed") {
                         has_packed = true;
                     }
                     Ok(())
                 });
+
+                // 如果找到 packed 关键字，立即返回 true
                 if has_packed {
                     return true;
                 }
             }
+            // 忽略其他类型的属性
             _ => (),
         }
     }
+    // 未找到任何含有 packed 的 repr 属性
     false
 }
 

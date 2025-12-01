@@ -123,7 +123,9 @@ impl<const N: usize, const DATA: usize> PduStorage<N, DATA> {
             );
         }
 
-        let frames = UnsafeCell::new(MaybeUninit::zeroed()); //  会创建一个未初始化的 [FrameElement<DATA>; N] 数组，并将其内存填充为零字节（所有位为 0）。自动调用FrameElement::default()？
+        // 会创建一个未初始化的 [FrameElement<DATA>; N] 数组，并将其内存填充为零字节（所有位为 0）。
+        // 没有调用FrameElement::default()
+        let frames = UnsafeCell::new(MaybeUninit::zeroed());
 
         Self {
             frames,

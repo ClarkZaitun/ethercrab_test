@@ -124,8 +124,7 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
         mut self: core::pin::Pin<&mut Self>, // 接收一个可变的 Pin 指针，Pin 用于确保 self 不会被移动，这在处理自引用结构体时很重要
         cx: &mut core::task::Context<'_>, // 任务上下文，包含一个 Waker，用于在异步操作准备好时唤醒任务
     ) -> Poll<Self::Output> {
-        // 检查帧是否已被取出。
-        // 已取出就是发送了？或者正在被这个函数处理？
+        // 检查帧是否已被取出。已取出就是正在被这个函数处理？
         // take 把 Option 内部的值取出来，同时将原 Option 置为 None。在取值过程中，它会获取 Option 内部值的所有权
         let Some(rxin) = self.frame.take() else {
             //如果 self.frame 为 None，说明帧已经被取出，记录错误日志并返回 Err 表示操作失败
@@ -134,7 +133,7 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
             return Poll::Ready(Err(PduError::InvalidFrameState.into()));
         };
 
-        // 将 rxin 中的唤醒器替换为当前任务上下文的唤醒器，以便在帧准备好时能唤醒当前任务
+        // 将帧中的唤醒器替换为当前任务上下文的唤醒器，以便在帧准备好时能唤醒当前任务
         rxin.replace_waker(cx.waker());
 
         // 获取storage缓冲区的帧索引
@@ -143,6 +142,7 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
         // 尝试将帧的状态从 RxDone 交换为 RxProcessing。如果交换成功，说明帧已经接收完成，记录日志并返回 Ok 表示操作成功；如果交换失败，记录之前的状态
         // RxDone is set by mark_received when the incoming packet has been parsed and stored
         let swappy = rxin.swap_state(FrameState::RxDone, FrameState::RxProcessing);
+        // 如果帧没有返回，则不会处于 RxDone 状态，因此交换会失败。就会进入下面的超时检查步骤
 
         let was = match swappy {
             // 帧接收完成，结束poll
@@ -158,14 +158,21 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
         fmt::trace!("frame index {} not ready yet ({:?})", frame_idx, was);
 
         // 检查超时
-        // 对超时定时器进行 poll 操作。如果定时器超时且没有重试次数了，释放帧并返回 Err 表示超时；
-        // 如果还有重试次数，重新设置定时器，将帧状态设置为 Sendable 并唤醒帧发送器，减少重试次数。
+        // 对超时定时器进行 poll 操作。
+
+        // 本函数的运行可能是异步任务被唤醒：
+        // 可能是由于超时定时器到期
+        // 可能是由于网络数据到达唤醒了任务
+        // 可能是由于其他地方主动唤醒了任务
+
         // 如果定时器未超时，则继续等待。
         // ??帧处理完成后会检查超时，以便我们至少有一次机会从网络接收回复。这应该可以缓解在帧刚收到时超时导致的竞争情况。
         // Timeout checked after frame handling so we get at least one chance to receive reply from
         // network. This should mitigate race conditions when timeout expires just as the frame is
         // received.
         match self.timeout_timer.poll(cx) {
+            // 在 ReceiveFrameFut 的 poll 方法中，当调用 self.timeout_timer.poll(cx) 时，定时器会获取当前任务上下文 cx 中的 Waker 引用
+            // 定时器内部会保存 ReceiveFrameFut Waker，用于在超时事件发生时唤醒 ReceiveFrameFut 的 poll
             Poll::Ready(_) => {
                 // We timed out
                 fmt::trace!(
@@ -173,6 +180,7 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
                     self.retries_left
                 );
 
+                // 如果定时器超时且没有重试次数了，释放帧并返回 Err 表示超时；
                 if self.retries_left == 0 {
                     // Release frame and PDU slots for reuse
                     Self::release(rxin);
@@ -185,10 +193,14 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
                 // If we have retry loops left:
 
                 // Assign new timeout
+
+                // 如果还有重试次数，重新设置定时器，
                 self.timeout_timer = crate::timer_factory::timer(self.timeout);
                 // Poll timer once to register with the executor
+                // 注册 ReceiveFrameFut waker ，确保定时器在下一次轮询时能够正确地检查是否超时
                 let _ = self.timeout_timer.poll(cx);
 
+                // 将帧状态设置为 Sendable 并唤醒帧发送器，减少重试次数。
                 // Mark frame as sendable once more
                 rxin.set_state(FrameState::Sendable);
                 // Wake frame sender so it picks up this frame we've just marked

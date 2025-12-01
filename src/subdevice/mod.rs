@@ -643,6 +643,7 @@ where
                 self.maindevice.timeouts.loop_tick().await;
             }
         }
+        // 将原始 Future (self) 包装成一个带超时的 TimeoutFuture
         .timeout(self.maindevice.timeouts.mailbox_echo())
         .await
         .inspect_err(|&e| {
@@ -678,6 +679,7 @@ where
                 self.maindevice.timeouts.loop_tick().await;
             }
         }
+        // 将原始 Future (self) 包装成一个带超时的 TimeoutFuture
         .timeout(self.maindevice.timeouts.mailbox_response())
         .await
         .inspect_err(|&e| {
@@ -1372,7 +1374,7 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
                 self.maindevice.timeouts.loop_tick().await;
             }
         }
-        //
+        // 将原始 Future (self) 包装成一个带超时的 TimeoutFuture
         .timeout(self.maindevice.timeouts.state_transition())
         .await
     }

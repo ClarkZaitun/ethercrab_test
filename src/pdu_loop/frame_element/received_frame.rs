@@ -273,6 +273,11 @@ impl ReceivedPdu<'_> {
         if self.working_counter == expected {
             Ok(self)
         } else {
+            // TODO 加入重发队列，唤醒发送器，帧重试次数减一
+            // self.frame.inner.set_state(FrameState::Sendable);
+            // self.pdu_loop.wake_sender();
+            // self.retries_left -= 1;
+
             Err(Error::WorkingCounter {
                 expected,
                 received: self.working_counter,

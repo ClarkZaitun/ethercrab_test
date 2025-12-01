@@ -549,6 +549,7 @@ impl<'sto> MainDevice<'sto> {
                 self.timeouts.loop_tick().await;
             }
         }
+        // 将原始 Future (self) 包装成一个带超时的 TimeoutFuture
         .timeout(self.timeouts.state_transition())
         .await
     }

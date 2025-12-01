@@ -803,6 +803,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, S, DC>
                 maindevice.timeouts.loop_tick().await;
             }
         }
+        // 将原始 Future (self) 包装成一个带超时的 TimeoutFuture
         .timeout(maindevice.timeouts.state_transition())
         .await
     }

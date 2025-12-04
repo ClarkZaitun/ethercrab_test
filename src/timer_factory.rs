@@ -169,7 +169,7 @@ impl Timeouts {
     // 轮询间隔控制函数，用于在需要重复轮询设备状态或等待条件满足的场景中，提供可配置的时间间隔。它确保在轮询操作之间有适当的延迟，以平衡系统响应性和资源使用。
     pub(crate) async fn loop_tick(&self) {
         #[cfg(not(miri))]
-        timer(self.wait_loop_delay()).await; // 调用 timer 函数创建一个定时器，异步等待指定时间(timer(self.wait_loop_delay).await) // 异步等待指定时间(timer(self.wait_loop_delay).await)
+        timer(self.wait_loop_delay()).await; // 调用 timer 函数创建一个定时器，异步等待指定时间(timer(self.wait_loop_delay).await)
         #[cfg(miri)]
         std::thread::yield_now();
     }

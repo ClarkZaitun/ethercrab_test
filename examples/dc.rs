@@ -31,6 +31,7 @@ const PDI_LEN: usize = 64;
 
 static PDU_STORAGE: PduStorage<MAX_FRAMES, MAX_PDU_DATA> = PduStorage::new();
 
+// 0x1c32:4和0x1c33:4。在SSC代码中，一定会附带这两个配置
 #[allow(unused)]
 #[derive(Debug, ethercrab_wire::EtherCrabWireRead)]
 #[wire(bytes = 2)]
@@ -115,18 +116,25 @@ fn main() -> Result<(), Error> {
         for mut subdevice in group.iter_mut(&maindevice) {
             if subdevice.name() == "LAN9252-EVB-HBI" {
                 // Sync mode 02 = SYNC0
+                // 设置同步模式为 SYNC0: 按SSC的描述，此处的设置应该是错误的。应该是由DC寄存器自动设置
+                // StartInputHandler() 中会根据 0x981寄存器值，综合 nPdOutputSize、nPdInputSize 设置 同步模式
+                // 实际的同步模式，可以从主站写入以在 ECAT FreeRun 和 ECAT Synchron 模式之间切换（如果从站支持这两种模式），
+                // 在 DC 模式下（由 DC 寄存器选择）此值将被 SYNCTYPE_DCSYNC0 或 SYNCTYPE_DCSYNC1 覆盖
+                // 默认模式为 ECAT Synchron 模式
                 subdevice
                     .sdo_write(0x1c32, 1, 2u16)
                     .await
                     .expect("Set sync mode");
 
                 // ETG1020 calc and copy time
+                // 读取从站的计算和复制时间
                 let cal_and_copy_time = subdevice
                     .sdo_read::<u16>(0x1c32, 6)
                     .await
                     .expect("Calc and copy time");
 
                 // Delay time
+                // 读取从站的延迟时间
                 let delay_time = subdevice
                     .sdo_read::<u16>(0x1c32, 9)
                     .await
@@ -139,14 +147,19 @@ fn main() -> Result<(), Error> {
                 );
 
                 // Adding this seems to make the second LAN9252 converge much more quickly
+                // 通过CoE设置SYNC0周期时间
+                // 是错误的，StartInputHandler() 会从 0x09A0 寄存器读取值后自动设置
                 subdevice
                     .sdo_write(0x1c32, 0x0a, TICK_INTERVAL.as_nanos() as u32)
                     .await
                     .expect("Set cycle time");
 
+                // 读取实际的同步模式和周期时间
                 let sync_type = subdevice.sdo_read::<u16>(0x1c32, 1).await?;
                 let cycle_time = subdevice.sdo_read::<u32>(0x1c32, 2).await?;
+                // 读取从站能支持的最小周期时间
                 let min_cycle_time = subdevice.sdo_read::<u32>(0x1c32, 5).await?;
+                // 读取从站能支持的同步模式
                 let supported_sync_modes = subdevice.sdo_read::<SupportedModes>(0x1c32, 4).await?;
                 log::info!(
                     "--> Outputs sync mode {sync_type}, cycle time {cycle_time} ns (min {min_cycle_time} ns), supported modes {supported_sync_modes:?}"
@@ -196,6 +209,7 @@ fn main() -> Result<(), Error> {
 
                 let sync_type = subdevice.sdo_read::<u16>(0x1c32, 1).await?;
                 let cycle_time = subdevice.sdo_read::<u32>(0x1c32, 2).await?;
+                // 读取 shift_time
                 let shift_time = subdevice.sdo_read::<u32>(0x1c32, 3).await?;
                 let min_cycle_time = subdevice.sdo_read::<u32>(0x1c32, 5).await?;
                 let supported_sync_modes = subdevice.sdo_read::<SupportedModes>(0x1c32, 4).await?;

@@ -204,12 +204,10 @@ pub struct CycleInfo {
 pub struct SubDeviceGroup<
     const MAX_SUBDEVICES: usize,
     const MAX_PDI: usize,
-    R: RawRwLock = crate::DefaultLock,
-    S = PreOp,
-    DC = NoDc,
+    R: RawRwLock = crate::DefaultLock, // 可选锁类型，默认为 DefaultLock
+    S = PreOp,                         // S = PreOp：一个泛型类型参数，默认值为 PreOp；
+    DC = NoDc,                         // DC = NoDc：一个泛型类型参数，默认值为 NoDc
 > {
-    // S = PreOp：一个泛型类型参数，默认值为 PreOp；DC = NoDc：一个泛型类型参数，默认值为 NoDc
-
     // 组ID
     // 从0开始，每个新增的组ID会加一
     id: GroupId,
@@ -725,7 +723,6 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, S, DC>
         fmt::trace!("Check group state");
 
         let mut subdevices = self.inner().subdevices.iter();
-        let subdevices_check = self.inner().subdevices.iter();
 
         let mut total_checks = 0;
 
@@ -803,7 +800,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, S, DC>
                 maindevice.timeouts.loop_tick().await;
             }
         }
-        // 将原始 Future (self) 包装成一个带超时的 TimeoutFuture
+        // 将原始 Future (self) 包装成一个带超时 5000 ms的 TimeoutFuture
         .timeout(maindevice.timeouts.state_transition())
         .await
     }

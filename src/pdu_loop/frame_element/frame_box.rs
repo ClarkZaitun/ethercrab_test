@@ -149,7 +149,7 @@ impl<'sto> FrameBox<'sto> {
         unsafe { core::slice::from_raw_parts_mut(ptr.as_ptr(), self.max_len - pdu_payload_start) }
     }
 
-    // 获取EtherCAT 数据报的字节切片
+    // 获取一个不可变的字节切片，该切片指向整个以太网帧中可用于EtherCAT数据报的区域
     /// Get frame payload area. This contains one or more PDUs and is located after the EtherCAT
     /// frame header.
     pub fn pdu_buf(&self) -> &[u8] {

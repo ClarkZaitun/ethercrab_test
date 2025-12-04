@@ -69,6 +69,7 @@ fn main() -> Result<(), ethercrab::error::Error> {
 
     let (tx, rx, pdu_loop) = PDU_STORAGE.try_split().expect("can only split once");
 
+    // 获取CPU核心 ID 列表
     let core_ids = core_affinity::get_core_ids().expect("Couldn't get core IDs");
 
     let tx_rx_core = core_ids
@@ -84,6 +85,7 @@ fn main() -> Result<(), ethercrab::error::Error> {
         .copied()
         .expect("At least 3 cores are required.");
 
+    // 设置 TX/RX 线程 FIFO 调度策略 优先级为 49
     thread_priority::ThreadBuilder::default()
         .name("tx-rx-thread")
         // Might need to set `<user> hard rtprio 99` and `<user> soft rtprio 99` in `/etc/security/limits.conf`

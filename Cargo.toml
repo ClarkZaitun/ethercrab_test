@@ -133,6 +133,9 @@ required-features = ["std"]
 name = "multiple-groups"
 required-features = ["std"]
 
+[[example]]
+name = "smol-io-uring-single-group"
+required-features = ["std"]
 [[bench]]
 name = "pdu_loop"
 harness = false

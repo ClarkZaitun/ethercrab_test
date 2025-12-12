@@ -195,3 +195,7 @@ Licensed under either of
 - MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
 
 at your option.
+
+cargo build --example smol-io-uring-single-group
+
+RUST_LOG=debug sudo ./target/debug/examples/smol-io-uring-single-group enp4s0

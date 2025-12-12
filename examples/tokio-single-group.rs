@@ -19,9 +19,6 @@ async fn main() -> Result<(), ethercrab::error::Error> {
         sync::Arc,
         time::{Duration, Instant},
     };
-    use thread_priority::{
-        RealtimeThreadSchedulePolicy, ThreadPriority, ThreadPriorityValue, ThreadSchedulePolicy,
-    };
     use tokio::time::MissedTickBehavior;
 
     /// Maximum number of SubDevices that can be stored. This must be a power of 2 greater than 1.
@@ -45,7 +42,7 @@ async fn main() -> Result<(), ethercrab::error::Error> {
         .nth(1)
         .expect("Provide network interface as first argument.");
 
-    log::info!("Starting single group demo with tokio (multi-threaded)...");
+    log::info!("Starting single group demo with tokio (similar to ek1100.rs)...");
     log::info!(
         "Ensure an EK1100 or EK1501 is the first SubDevice, with any number of modules connected after"
     );
@@ -53,54 +50,8 @@ async fn main() -> Result<(), ethercrab::error::Error> {
 
     let (tx, rx, pdu_loop) = PDU_STORAGE.try_split().expect("can only split once");
 
-    let core_ids = core_affinity::get_core_ids().expect("Couldn't get core IDs");
-
-    let tx_rx_core = core_ids
-        .first()
-        .copied()
-        .expect("At least one core is required. Are you running on a potato?");
-
-    // Spawn the TX/RX task on a separate thread
-    let handle = thread_priority::ThreadBuilder::default()
-        .name("tx-rx-thread")
-        // Might need to set `<user> hard rtprio 99` and `<user> soft rtprio 99` in `/etc/security/limits.conf`
-        // Check limits with `ulimit -Hr` or `ulimit -Sr`
-        .priority(ThreadPriority::Crossplatform(
-            ThreadPriorityValue::try_from(49u8).unwrap(),
-        ))
-        // NOTE: Requires a realtime kernel
-        .policy(ThreadSchedulePolicy::Realtime(
-            RealtimeThreadSchedulePolicy::Fifo,
-        ))
-        .spawn(move |_| {
-            core_affinity::set_for_current(tx_rx_core)
-                .then_some(())
-                .expect("Set TX/RX thread core");
-
-            // libc socket
-            match ethercrab::std::tx_rx_task(&interface, tx, rx) {
-                Ok(task) => {
-                    futures_lite::future::block_on(task).expect("TX/RX task");
-                }
-                Err(e) => {
-                    eprintln!(
-                        "Failed to create TX/RX task for interface '{}': {}",
-                        interface, e
-                    );
-                    eprintln!("Possible causes:");
-                    eprintln!(
-                        "1. Interface '{}' does not exist or is not available",
-                        interface
-                    );
-                    eprintln!(
-                        "2. Insufficient permissions (try running with sudo or setting cap_net_raw)"
-                    );
-                    eprintln!("3. Interface is not an Ethernet interface");
-                    panic!("Failed to create TX/RX task");
-                }
-            }
-        })
-        .unwrap();
+    // Spawn the TX/RX task similar to ek1100.rs
+    tokio::spawn(ethercrab::std::tx_rx_task(&interface, tx, rx).expect("spawn TX/RX task"));
 
     let maindevice = MainDevice::new(
         pdu_loop,
@@ -175,9 +126,6 @@ async fn main() -> Result<(), ethercrab::error::Error> {
 
         interval.tick().await;
     }
-
-    // Wait for the TX/RX thread to complete (though it runs indefinitely)
-    handle.join().unwrap();
 
     Ok(())
 }

@@ -11,8 +11,7 @@ fn main() {
 }
 
 #[cfg(target_os = "linux")]
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), ethercrab::error::Error> {
+fn main() -> Result<(), ethercrab::error::Error> {
     use env_logger::{Env, TimestampPrecision};
     use ethercrab::{MainDevice, MainDeviceConfig, PduStorage, Timeouts, std::ethercat_now};
     use std::{
@@ -101,79 +100,87 @@ async fn main() -> Result<(), ethercrab::error::Error> {
         })
         .unwrap();
 
-    let maindevice = MainDevice::new(
-        pdu_loop,
-        Timeouts {
-            // Enormous timeout so we can still keep going even with very high system load
-            // preventing processing from happening.
-            pdu: Duration::from_millis(1000),
-            ..Timeouts::default()
-        },
-        MainDeviceConfig::default(),
-    );
+    // Create a single-threaded tokio runtime for the main task
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
 
-    let maindevice = Arc::new(maindevice);
-
-    // Read configurations from SubDevice EEPROMs and configure devices.
-    let group = maindevice
-        .init_single_group::<MAX_SUBDEVICES, PDI_LEN>(ethercat_now)
-        .await
-        .expect("Init");
-
-    log::info!("Discovered {} SubDevices", group.len());
-
-    let group = group.into_op(&maindevice).await.expect("PRE-OP -> OP");
-
-    for subdevice in group.iter(&maindevice) {
-        let io = subdevice.io_raw();
-
-        log::info!(
-            "-> SubDevice {:#06x} {} inputs: {} bytes, outputs: {} bytes",
-            subdevice.configured_address(),
-            subdevice.name(),
-            io.inputs().len(),
-            io.outputs().len()
-        );
-    }
-
-    let maindevice_clone = maindevice.clone();
-
-    // Create interval timer for cyclic task
-    let mut interval = tokio::time::interval(Duration::from_micros(INTERVAL));
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-    // 添加时间测量
-    let mut last_time = Instant::now();
-
-    loop {
-        let Ok(_) = group.tx_rx(&maindevice_clone).await else {
-            break;
-        };
-
-        // 测量实际周期时间
-        let current_time = Instant::now();
-        let elapsed = current_time.duration_since(last_time);
-        last_time = current_time;
-
-        // [2025-12-12T02:41:07.465343268Z INFO  smol_io_uring_single_group] Actual cycle time: 246.557µs (expected: 100µs)
-        // 抓包和打印都证明没有达到100µs
-        log::info!(
-            "Actual cycle time: {:?} (expected: {:?})",
-            elapsed,
-            Duration::from_micros(INTERVAL)
+    rt.block_on(async {
+        let maindevice = MainDevice::new(
+            pdu_loop,
+            Timeouts {
+                // Enormous timeout so we can still keep going even with very high system load
+                // preventing processing from happening.
+                pdu: Duration::from_millis(1000),
+                ..Timeouts::default()
+            },
+            MainDeviceConfig::default(),
         );
 
-        // Increment every output byte for every SubDevice by one
-        for subdevice in group.iter(&maindevice_clone) {
-            let mut o = subdevice.outputs_raw_mut();
+        let maindevice = Arc::new(maindevice);
 
-            for byte in o.iter_mut() {
-                *byte = byte.wrapping_add(1);
-            }
+        // Read configurations from SubDevice EEPROMs and configure devices.
+        let group = maindevice
+            .init_single_group::<MAX_SUBDEVICES, PDI_LEN>(ethercat_now)
+            .await
+            .expect("Init");
+
+        log::info!("Discovered {} SubDevices", group.len());
+
+        let group = group.into_op(&maindevice).await.expect("PRE-OP -> OP");
+
+        for subdevice in group.iter(&maindevice) {
+            let io = subdevice.io_raw();
+
+            log::info!(
+                "-> SubDevice {:#06x} {} inputs: {} bytes, outputs: {} bytes",
+                subdevice.configured_address(),
+                subdevice.name(),
+                io.inputs().len(),
+                io.outputs().len()
+            );
         }
 
-        interval.tick().await;
-    }
+        let maindevice_clone = maindevice.clone();
+
+        // Create interval timer for cyclic task
+        let mut interval = tokio::time::interval(Duration::from_micros(INTERVAL));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        // 添加时间测量
+        let mut last_time = Instant::now();
+
+        loop {
+            let Ok(_) = group.tx_rx(&maindevice_clone).await else {
+                break;
+            };
+
+            // 测量实际周期时间
+            let current_time = Instant::now();
+            let elapsed = current_time.duration_since(last_time);
+            last_time = current_time;
+
+            // [2025-12-12T02:41:07.465343268Z INFO  smol_io_uring_single_group] Actual cycle time: 246.557µs (expected: 100µs)
+            // 抓包和打印都证明没有达到100µs
+            log::info!(
+                "Actual cycle time: {:?} (expected: {:?})",
+                elapsed,
+                Duration::from_micros(INTERVAL)
+            );
+
+            // Increment every output byte for every SubDevice by one
+            for subdevice in group.iter(&maindevice_clone) {
+                let mut o = subdevice.outputs_raw_mut();
+
+                for byte in o.iter_mut() {
+                    *byte = byte.wrapping_add(1);
+                }
+            }
+
+            interval.tick().await;
+        }
+    });
 
     Ok(())
 }

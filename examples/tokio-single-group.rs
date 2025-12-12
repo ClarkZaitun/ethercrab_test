@@ -15,7 +15,6 @@ fn main() -> Result<(), ethercrab::error::Error> {
     use env_logger::{Env, TimestampPrecision};
     use ethercrab::{MainDevice, MainDeviceConfig, PduStorage, Timeouts, std::ethercat_now};
     use std::{sync::Arc, time::Duration};
-    use tokio::time::MissedTickBehavior;
 
     // Set process to real-time scheduling with FIFO policy and priority 49
     unsafe {
@@ -124,13 +123,16 @@ fn main() -> Result<(), ethercrab::error::Error> {
         let maindevice_clone = maindevice.clone();
 
         // Create interval timer for cyclic task
-        let mut interval = tokio::time::interval(Duration::from_micros(INTERVAL));
-        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let interval_duration = Duration::from_micros(INTERVAL);
+        let mut next_tick = std::time::Instant::now() + interval_duration;
 
         // 添加时间测量 (使用libc的clock_gettime)
         let mut last_time = get_monotonic_time_nanos();
+        let mut cycle_count = 0u64;
 
         loop {
+            // 屏蔽周期任务，空跑循环测试基础定时器性能
+            /*
             // 测量group.tx_rx执行时间
             let tx_rx_start = get_monotonic_time_nanos();
             let tx_rx_result = group.tx_rx(&maindevice_clone).await;
@@ -140,22 +142,27 @@ fn main() -> Result<(), ethercrab::error::Error> {
             let Ok(_) = tx_rx_result else {
                 break;
             };
+            */
 
             // 测量实际周期时间
             let current_time = get_monotonic_time_nanos();
             let elapsed = current_time.saturating_sub(last_time);
             last_time = current_time;
 
+            cycle_count += 1;
+
             // [2025-12-12T02:41:07.465343268Z INFO  smol_io_uring_single_group] Actual cycle time: 246.557µs (expected: 100µs)
             // 抓包和打印都证明没有达到100µs
             log::info!(
-                "Cycle time: {}ns, TX/RX duration: {}ns (expected interval: {}ns)",
+                "Cycle #{}, Cycle time: {}ns, TX/RX duration: {}ns (expected interval: {}ns)",
+                cycle_count,
                 elapsed,
-                tx_rx_duration,
+                0, // 空跑时没有TX/RX持续时间
                 INTERVAL * 1000 // Convert microseconds to nanoseconds
             );
 
             // Increment every output byte for every SubDevice by one
+            /*
             for subdevice in group.iter(&maindevice_clone) {
                 let mut o = subdevice.outputs_raw_mut();
 
@@ -163,8 +170,26 @@ fn main() -> Result<(), ethercrab::error::Error> {
                     *byte = byte.wrapping_add(1);
                 }
             }
+            */
 
-            interval.tick().await;
+            // 使用更精确的定时控制
+            let now = std::time::Instant::now();
+            if next_tick > now {
+                let sleep_duration = next_tick - now;
+                // 记录sleep之前的时刻
+                let sleep_start = get_monotonic_time_nanos();
+                tokio::time::sleep(sleep_duration).await;
+                let sleep_end = get_monotonic_time_nanos();
+
+                // 测量sleep的等待时间
+                let sleep_duration_actual = sleep_end.saturating_sub(sleep_start);
+                log::debug!("Sleep wait time: {}ns", sleep_duration_actual);
+            } else {
+                log::warn!("Missed deadline by {:?}", now - next_tick);
+            }
+
+            // 更新下次tick时间
+            next_tick += interval_duration;
         }
     });
 

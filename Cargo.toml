@@ -140,6 +140,22 @@ required-features = ["std"]
 [[example]]
 name = "tokio-single-group"
 required-features = ["std"]
+
+[[example]]
+name = "spawn-test"
+required-features = ["std"]
+
+[[example]]
+name = "spawn-overhead"
+required-features = ["std"]
+
+[[example]]
+name = "simple-spawn"
+required-features = ["std"]
+
+[[example]]
+name = "smol-spawn"
+required-features = ["std"]
 [[bench]]
 name = "pdu_loop"
 harness = false

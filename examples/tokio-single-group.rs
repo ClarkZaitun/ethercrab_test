@@ -14,10 +14,7 @@ fn main() {
 fn main() -> Result<(), ethercrab::error::Error> {
     use env_logger::{Env, TimestampPrecision};
     use ethercrab::{MainDevice, MainDeviceConfig, PduStorage, Timeouts, std::ethercat_now};
-    use std::{
-        sync::Arc,
-        time::{Duration, Instant},
-    };
+    use std::{sync::Arc, time::Duration};
     use tokio::time::MissedTickBehavior;
 
     // Set process to real-time scheduling with FIFO policy and priority 49
@@ -130,25 +127,32 @@ fn main() -> Result<(), ethercrab::error::Error> {
         let mut interval = tokio::time::interval(Duration::from_micros(INTERVAL));
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-        // 添加时间测量
-        let mut last_time = Instant::now();
+        // 添加时间测量 (使用libc的clock_gettime)
+        let mut last_time = get_monotonic_time_nanos();
 
         loop {
-            let Ok(_) = group.tx_rx(&maindevice_clone).await else {
+            // 测量group.tx_rx执行时间
+            let tx_rx_start = get_monotonic_time_nanos();
+            let tx_rx_result = group.tx_rx(&maindevice_clone).await;
+            let tx_rx_end = get_monotonic_time_nanos();
+            let tx_rx_duration = tx_rx_end.saturating_sub(tx_rx_start);
+
+            let Ok(_) = tx_rx_result else {
                 break;
             };
 
             // 测量实际周期时间
-            let current_time = Instant::now();
-            let elapsed = current_time.duration_since(last_time);
+            let current_time = get_monotonic_time_nanos();
+            let elapsed = current_time.saturating_sub(last_time);
             last_time = current_time;
 
             // [2025-12-12T02:41:07.465343268Z INFO  smol_io_uring_single_group] Actual cycle time: 246.557µs (expected: 100µs)
             // 抓包和打印都证明没有达到100µs
             log::info!(
-                "Actual cycle time: {:?} (expected: {:?})",
+                "Cycle time: {}ns, TX/RX duration: {}ns (expected interval: {}ns)",
                 elapsed,
-                Duration::from_micros(INTERVAL)
+                tx_rx_duration,
+                INTERVAL * 1000 // Convert microseconds to nanoseconds
             );
 
             // Increment every output byte for every SubDevice by one
@@ -165,6 +169,16 @@ fn main() -> Result<(), ethercrab::error::Error> {
     });
 
     Ok(())
+}
+
+// Helper function to get monotonic time using libc's clock_gettime
+fn get_monotonic_time_nanos() -> u64 {
+    let mut ts = std::mem::MaybeUninit::<libc::timespec>::uninit();
+    unsafe {
+        libc::clock_gettime(libc::CLOCK_MONOTONIC, ts.as_mut_ptr());
+        let ts = ts.assume_init();
+        (ts.tv_sec as u64) * 1_000_000_000 + (ts.tv_nsec as u64)
+    }
 }
 
 // [2025-12-12T03:46:07.334213124Z INFO  tokio_single_group] Actual cycle time: 1.164632ms (expected: 1ms)

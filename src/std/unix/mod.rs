@@ -22,8 +22,8 @@ use futures_lite::{AsyncRead, AsyncWrite};
 //<'a> 是一个生命周期参数，用于确保结构体中引用类型的生命周期与外部数据的生命周期保持一致，避免悬垂引用。
 struct TxRxFut<'a> {
     socket: Async<RawSocketDesc>, //Async 来自 async_io 库，它能将阻塞的 I/O 操作转换为异步操作。
-    mtu: usize,                   //获取当前套接字关联网络接口的 MTU 值有什么用？
-    tx: Option<PduTx<'a>>,        //整个程序公用一个帧缓冲区，用于存储发送和接收的 PDU 帧。
+    mtu: usize, // 获取当前套接字关联网络接口的 MTU 值，用于在接收帧时创建指定长度的缓冲区
+    tx: Option<PduTx<'a>>, //整个程序公用一个帧缓冲区，用于存储发送和接收的 PDU 帧。
     //在 TxRxFut 结构体中，tx 和 rx 字段分别用于存储 PduTx 和 PduRx 类型的引用。
     //PduTx 用于发送 PDU 帧，PduRx 用于接收 PDU 帧。
     //通过将 tx 和 rx 字段声明为 Option 类型，TxRxFut 结构体可以在不提前知道 PduTx 和 PduRx 实例的情况下，
@@ -71,6 +71,11 @@ impl<'a> Future for TxRxFut<'a> {
             let res = frame.send_blocking(|data| {
                 //将 self.socket 的可变引用包装在 Pin 中。Pin 用于固定对象的内存位置，确保在异步操作过程中对象不会被移动，这对实现 Future 的对象尤为重要
                 //用 AsyncWrite trait 的 poll_write 方法，尝试将 data 写入 self.socket。ctx 是 core::task::Context 类型的引用，包含任务的唤醒器 waker，用于在 I/O 操作就绪时唤醒任务
+                // poll_write 内部调用了系统调用 write，将 data 写入 self.socket。
+                //如果 write 调用成功，返回 Poll::Ready(Ok(bytes_written))，表示成功写入 bytes_written 字节。
+                //如果 write 调用失败，返回 Poll::Ready(Err(e))，表示写入失败，包含错误信息 e。
+                //如果 write 调用未完成，返回 Poll::Pending，表示当前任务未就绪，需要等待 I/O 操作完成后再继续。
+                // 如果数据长度不足60字节，会自动补全为60字节
                 match Pin::new(&mut self.socket).poll_write(ctx, data) {
                     Poll::Ready(Ok(bytes_written)) => {
                         if bytes_written != data.len() {
@@ -101,6 +106,7 @@ impl<'a> Future for TxRxFut<'a> {
             }
         }
         // 低效？：运行时创建存放帧的缓冲区
+        // TODO 创建在堆上，可以移动到函数外
         let mut buf = vec![0; self.mtu];
 
         // 接收帧
@@ -161,6 +167,8 @@ pub fn tx_rx_task<'sto>(
 {
     let mut socket = RawSocketDesc::new(interface)?;
 
+    // macOS 强制将源地址设置为网卡的 MAC 地址，因此不能使用 `MASTER_ADDR`
+    // 为了过滤返回的数据包，我们必须设置要与网卡 MAC 地址进行比较的地址。
     // macOS forcibly sets the source address to the NIC's MAC, so instead of using `MASTER_ADDR`
     // for filtering returned packets, we must set the address to compare to the NIC MAC.
     #[cfg(all(not(target_os = "linux"), unix))]
@@ -229,5 +237,6 @@ fn ifreq_for(name: &str) -> ifreq {
 #[allow(non_camel_case_types)]
 struct ifreq {
     ifr_name: [libc::c_char; libc::IF_NAMESIZE],
+    // 用于执行 ioctl 系统调用
     ifr_data: libc::c_int, /* ifr_ifindex or ifr_mtu */
 }

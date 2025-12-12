@@ -95,18 +95,29 @@ impl RawSocketDesc {
     }
 }
 
+// 实现了 Unix 平台特有的 AsRawFd trait，用于获取底层原始文件描述符
+// 允许 RawSocketDesc 类型与使用原始文件描述符的 C API（如 libc）交互
+// 在代码中被 Read 和 Write 实现使用，通过 self.as_raw_fd() 获取底层文件描述符进行读写操作
+// 提供了从 Rust 类型到操作系统级文件描述符的直接转换
 impl AsRawFd for RawSocketDesc {
     fn as_raw_fd(&self) -> RawFd {
         self.lower
     }
 }
 
+// 实现了更现代的 AsFd trait，用于获取安全的借用文件描述符 (BorrowedFd)
+// 提供了更安全的接口，返回 BorrowedFd<'_> 类型的引用，具有更好的生命周期管理
+// 支持与 Rust 标准库中更现代的 I/O API 兼容，特别是那些期望接收 AsFd 实现的函数
+// 使用 unsafe 块调用 BorrowedFd::borrow_raw 将原始文件描述符转换为安全的借用形式
 impl AsFd for RawSocketDesc {
     fn as_fd(&self) -> BorrowedFd<'_> {
         unsafe { BorrowedFd::borrow_raw(self.lower) }
     }
 }
 
+// 安全性：实现此特性可确保底层套接字资源不会被 `Read` 或 `Write` 实现丢弃。
+// 更多信息请参阅
+// [此处](https://docs.rs/async-io/latest/async_io/trait.IoSafe.html)。
 // SAFETY: Implementing this trait pledges that the underlying socket resource will not be dropped
 // by `Read` or `Write` impls. More information can be read
 // [here](https://docs.rs/async-io/latest/async_io/trait.IoSafe.html).
@@ -115,38 +126,84 @@ unsafe impl IoSafe for RawSocketDesc {}
 impl Drop for RawSocketDesc {
     fn drop(&mut self) {
         unsafe {
+            // 调用 C 标准库函数关闭底层套接字文件描述符
             libc::close(self.lower);
         }
     }
 }
 
+/// 为 RawSocketDesc 实现标准库的 Read 特性
+/// 允许通过标准的 Rust I/O 接口从 EtherCAT 原始套接字读取数据
 impl io::Read for RawSocketDesc {
+    /// 从套接字读取数据到指定缓冲区
+    ///
+    /// # 参数
+    /// - `buf`: 用于存储读取数据的可变缓冲区
+    ///
+    /// # 返回值
+    /// - `Ok(usize)`: 成功读取的字节数
+    /// - `Err(io::Error)`: 读取失败时返回的错误信息
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let len = unsafe { libc::read(self.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) };
+        // 使用 unsafe 块调用 libc::read 函数从原始套接字读取数据
+        // 原因：涉及 FFI 调用和原始指针操作，Rust 编译器无法保证其安全性
+        let len = unsafe {
+            libc::read(
+                self.as_raw_fd(),        // 获取底层原始文件描述符
+                buf.as_mut_ptr().cast(), // 将 Rust 可变缓冲区指针转换为 C 指针
+                buf.len(),               // 要读取的最大字节数
+            )
+        };
+
+        // 检查读取是否失败（len == -1 表示失败）
         if len == -1 {
-            Err(io::Error::last_os_error())
+            Err(io::Error::last_os_error()) // 返回系统级错误信息
         } else {
-            Ok(len as usize)
+            Ok(len as usize) // 成功读取，返回实际读取的字节数
         }
     }
 }
 
+/// 为 RawSocketDesc 实现标准库的 Write 特性
+/// 允许通过标准的 Rust I/O 接口向 EtherCAT 原始套接字写入数据
 impl io::Write for RawSocketDesc {
+    /// 将数据从缓冲区写入套接字
+    ///
+    /// # 参数
+    /// - `buf`: 包含要写入数据的缓冲区
+    ///
+    /// # 返回值
+    /// - `Ok(usize)`: 成功写入的字节数
+    /// - `Err(io::Error)`: 写入失败时返回的错误信息
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let len = unsafe { libc::write(self.as_raw_fd(), buf.as_ptr().cast(), buf.len()) };
+        // 使用 unsafe 块调用 libc::write 函数向原始套接字写入数据
+        // 原因：涉及 FFI 调用和原始指针操作，Rust 编译器无法保证其安全性
+        let len = unsafe {
+            libc::write(
+                self.as_raw_fd(),    // 获取底层原始文件描述符
+                buf.as_ptr().cast(), // 将 Rust 缓冲区指针转换为 C 指针
+                buf.len(),           // 要写入的字节数
+            )
+        };
+
+        // 检查写入是否失败（len == -1 表示失败）
         if len == -1 {
-            Err(io::Error::last_os_error())
+            Err(io::Error::last_os_error()) // 返回系统级错误信息
         } else {
-            Ok(len as usize)
+            Ok(len as usize) // 成功写入，返回实际写入的字节数
         }
     }
 
+    /// 刷新内部缓冲区
+    ///
+    /// # 注意
+    /// 对于原始套接字，此方法是一个空操作（no-op），因为套接字没有内部缓冲区
+    /// 数据会直接发送到底层网络接口
     fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+        Ok(()) // 总是成功，无需实际操作
     }
 }
 
-//用于执行 ioctl 系统调用
+// 用于执行 ioctl 系统调用
 fn ifreq_ioctl(
     lower: libc::c_int,
     ifreq: &mut ifreq,

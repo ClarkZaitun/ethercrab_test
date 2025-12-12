@@ -11,7 +11,7 @@ description = "A pure Rust EtherCAT MainDevice supporting std and no_std environ
 keywords = ["ethercat", "beckhoff", "automation", "fieldbus", "robotics"]
 exclude = ["dumps", "doc", "NOTES.md", "SPECNOTES.md"]
 resolver = "2"
-rust-version = "1.85"
+# rust-version = "1.85"
 
 [workspace]#工作区的配置部分。工作区允许你在一个项目中管理多个相互关联的 crate，这些 crate 可以共享依赖，统一构建和测试。
 members = ["ethercrab-wire", "ethercrab-wire-derive"]#该字段列出了工作区包含的子 crate 列表。["ethercrab-wire", "ethercrab-wire-derive"] 表明工作区包含 ethercrab-wire 和 ethercrab-wire-derive 这两个子 crate。Cargo 会在当前目录下查找这两个子 crate 对应的目录。

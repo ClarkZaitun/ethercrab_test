@@ -15,10 +15,7 @@ fn main() {
 #[cfg(target_os = "linux")]
 fn main() -> Result<(), ethercrab::error::Error> {
     use env_logger::{Env, TimestampPrecision};
-    use ethercrab::{
-        MainDevice, MainDeviceConfig, PduStorage, Timeouts,
-        std::{ethercat_now, tx_rx_task_io_uring},
-    };
+    use ethercrab::{MainDevice, MainDeviceConfig, PduStorage, Timeouts, std::ethercat_now};
     use futures_lite::StreamExt;
     use std::{sync::Arc, time::Duration};
     use thread_priority::{
@@ -77,8 +74,12 @@ fn main() -> Result<(), ethercrab::error::Error> {
                 .then_some(())
                 .expect("Set TX/RX thread core");
 
-            // Blocking io_uring
-            tx_rx_task_io_uring(&interface, tx, rx).expect("TX/RX task");
+            // libc socket
+            if let Ok(task) = ethercrab::std::tx_rx_task(&interface, tx, rx) {
+                smol::block_on(task).expect("TX/RX task");
+            } else {
+                panic!("Failed to create TX/RX task");
+            }
         })
         .unwrap();
 

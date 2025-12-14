@@ -163,6 +163,7 @@ impl<'sto> FrameBox<'sto> {
         unsafe { core::slice::from_raw_parts(ptr.as_ptr(), self.max_len - pdu_payload_start) }
     }
 
+    // 将 storage 中的帧转换为 可变的以太网帧
     fn ethernet_frame_mut(&mut self) -> EthernetFrame<&mut [u8]> {
         // SAFETY: We hold a mutable reference to the containing `FrameBox`. A `FrameBox` can only
         // be created from a successful unique acquisition of a frame element.

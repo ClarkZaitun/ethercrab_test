@@ -49,7 +49,7 @@ impl<'a> Future for TxRxFut<'a> {
             self.tx //是 Option<PduTx<'a>> 类型的字段，代表 PDU 发送器。
                 .as_mut() //将 Option 转换为可变引用，方便修改内部值。
                 .unwrap_unchecked() // 直接获取 Option 内部的 PduTx 可变引用，不进行 None 检查。
-                .replace_waker(ctx.waker()); //调用 PduTx 的 replace_waker 方法，将当前任务的唤醒器 ctx.waker() 替换到发送器中。
+                .replace_waker(ctx.waker()); // 调用 PduTx 的 replace_waker 方法，将当前任务的唤醒器 ctx.waker() 替换到发送器中。
             //这能确保当发送器有新的可发送数据时，当前的 Future 会被再次轮询。
 
             // 如果检测到退出标志，则释放 PduTx 和 PduRx，返回 Ok((PduTx, PduRx))，退出这个异步任务

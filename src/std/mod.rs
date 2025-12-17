@@ -25,10 +25,9 @@ pub use io_uring::tx_rx_task_io_uring;
 #[cfg(all(target_os = "linux", feature = "xdp"))]
 pub use xdp::tx_rx_task_xdp;
 
-//此结构体用于管理线程的阻塞和唤醒操作。
-//它包含一个current_thread字段，用于存储当前线程的句柄。
-//wait方法用于阻塞当前线程，直到被唤醒。
+// 此结构体用于管理线程的阻塞和唤醒操作。
 struct ParkSignal {
+    // 用于存储当前线程的句柄。
     current_thread: Thread,
 }
 
@@ -39,8 +38,9 @@ impl ParkSignal {
         }
     }
 
+    // 阻塞当前线程，直到被唤醒。
     fn wait(&self) {
-        thread::park();
+        thread::park(); // 阻塞当前线程，等待唤醒信号
     }
 
     //使当前线程阻塞指定的时长 timeout。超时后，线程会自动恢复执行。
@@ -51,6 +51,6 @@ impl ParkSignal {
 
 impl Wake for ParkSignal {
     fn wake(self: Arc<Self>) {
-        self.current_thread.unpark();
+        self.current_thread.unpark(); // 唤醒之前被park()阻塞的线程
     }
 }

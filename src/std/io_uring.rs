@@ -73,13 +73,13 @@ pub fn tx_rx_task_io_uring<'sto>(
     // 高性能 PDU 传输： 通过 io_uring 提交读写操作
 
     loop {
-        // 将 waker 对象注册到 PduTx 实例中，用于在需要发送新的 EtherCAT 帧时唤醒对应的异步任务。
+        // 将本任务的 waker 对象注册到 PduTx 实例中，用于在需要发送新的 EtherCAT 帧时唤醒这个异步任务。
         pdu_tx.replace_waker(&waker);
 
         let mut sent = 0;
 
         while let Some(frame) = pdu_tx.next_sendable_frame() {
-            let idx = frame.storage_slot_index();
+            let idx = frame.storage_slot_index(); // 获取帧索引仅用于日志记录
 
             // 获取一个空闲槽位的可变引用，用于发送操作
             let tx_b = bufs.vacant_entry();

@@ -116,7 +116,7 @@ pub fn tx_rx_task_blocking<'sto>(
     loop {
         fmt::trace!("Begin TX/RX iteration");
 
-        //replace_waker 方法将之前创建的 waker 对象传递给它。waker 用于在异步任务准备好继续执行时唤醒对应的任务
+        // replace_waker 方法将本任务的 waker 对象传递给发帧器。waker 用于在准备好帧时唤醒这个任务
         pdu_tx.replace_waker(&waker);
 
         //记录本次迭代中发送的帧数

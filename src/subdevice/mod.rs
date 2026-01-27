@@ -215,6 +215,8 @@ impl SubDevice {
             .map(|dl_status| {
                 // NOTE: dc_receive_times are populated during DC initialisation
                 // Ports in EtherCAT order 0 -> 3 -> 1 -> 2
+                // TODO 这里的检测依据是0x110是否有物理连接
+                // 0x111能继续检测是否打开，是否建立稳定通信。SOEM使用0x111
                 Ports::new(
                     dl_status.link_port0,
                     dl_status.link_port3,
@@ -420,7 +422,9 @@ impl SubDevice {
         &self.config.io
     }
 
-    // 检查当前子设备是否为“父设备”的子设备
+    // 检查当前子设备是否为“父设备”的子设备。
+    // 这里的子设备的概念和常规不同：
+    // 如果子设备连接到父设备的中间端口，即未连接到最后一个开放端口，则该子设备是父设备的子设备。
     // TODO: 判断方法还需要考证
     /// Check if the current SubDevice is a child of `parent`.
     ///
@@ -439,10 +443,11 @@ impl SubDevice {
         // 从端口的角度看，分叉forks从站和交叉crosses从站增加的端口不一定是中间的端口
         let parent_is_fork = parent.ports.topology().is_junction();
 
+        // 通过从站索引找到在父从站的端口 Ports 实例里分配给当前从站的端口
         let parent_port = parent.ports.port_assigned_to(self);
 
         // Children in a fork must be connected to intermediate ports
-        // fork从站（forks和crosses） 中的子节点必须连接到中间端口？这是错误的说法。
+        // TODO fork从站（forks和crosses） 中的子节点必须连接到中间端口？这是错误的说法。
         // 判断当前端口是否为从站的最后一个端口（ESC顺序）
         let child_attached_to_last_parent_port =
             parent_port.is_some_and(|child_port| parent.ports.is_last_port(child_port));
@@ -1383,6 +1388,7 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
         Command::fpwr(self.configured_address, register.into())
     }
 
+    // FPRD 期望WKC固定为1，因此默认会检查WKC
     pub(crate) fn read(&self, register: impl Into<u16>) -> WrappedRead {
         Command::fprd(self.configured_address, register.into())
     }

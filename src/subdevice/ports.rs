@@ -5,10 +5,10 @@ use core::{fmt::Debug, num::NonZeroU16};
 #[derive(Default, Debug, PartialEq, Eq, Copy, Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Port {
-    // 是否激活
+    // 是否有物理连接
     pub active: bool,
     // 端口的接收时间
-    pub dc_receive_time: u32,
+    pub receive_time: u32,
     /// The EtherCAT port number, ordered as 0 -> 3 -> 1 -> 2.
     // 端口序号
     pub number: u8,
@@ -51,6 +51,7 @@ impl Topology {
     }
 }
 
+// 端口顺序为 0 -> 3 -> 1 -> 2
 #[derive(Default, Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Ports(pub [Port; 4]);
@@ -109,10 +110,10 @@ impl Ports {
     ) {
         // NOTE: indexes vs EtherCAT port order
         // 注意端口的顺序
-        self.0[0].dc_receive_time = time_p0;
-        self.0[1].dc_receive_time = time_p3;
-        self.0[2].dc_receive_time = time_p1;
-        self.0[3].dc_receive_time = time_p2;
+        self.0[0].receive_time = time_p0;
+        self.0[1].receive_time = time_p3;
+        self.0[2].receive_time = time_p1;
+        self.0[3].receive_time = time_p2;
     }
 
     /// TEST ONLY: Set downstream ports.
@@ -150,17 +151,18 @@ impl Ports {
 
     /// The port of the SubDevice that first sees EtherCAT traffic.
     // 获取当前设备中第一个接收到 EtherCAT 流量的端口，该端口是流量进入设备的入口
-    // 正确的网线连接都是端口0。如果网线反接才是其他端口。这个库允许反接的情况?
+    // TODO 正确的网线连接都是端口0。如果网线反接才是其他端口。这个库允许反接的情况?
+    // TODO 端口时间为32位，这里没有考虑溢出情况
     pub fn entry_port(&self) -> Port {
         fmt::unwrap_opt!(
             self.active_ports() // 返回一个迭代器，该迭代器会遍历 Ports 结构体中所有处于激活状态的端口
-                .min_by_key(|port| port.dc_receive_time) // 找到端口接收时间最小的端口
+                .min_by_key(|port| port.receive_time) // 找到端口接收时间最小的端口
                 .copied() // 将 Option<&Port> 类型转换为 Option<Port> 类型
         )
     }
 
     // 获取最后一个开放端口
-    // 这里的最后一个的意思是ESC激活端口顺序的最后一个，不是按照端口接收时间最大判断出的物理连接顺序最后的那个
+    // 这里的最后一个的意思是ESC激活端口顺序的最后一个（0 3 1 2），不是按照端口接收时间最大判断出的物理连接顺序最后的那个
     /// Get the last open port.
     pub fn last_port(&self) -> Option<&Port> {
         self.active_ports().last()
@@ -168,7 +170,8 @@ impl Ports {
 
     /// Find the next port that hasn't already been assigned as the upstream port of another
     /// SubDevice.
-    // 找出下一个还未被指定为其他从设备（SubDevice）上游端口的端口
+    // 找出下一个还未被指定为其他从设备（SubDevice）上游端口的端口（且已激活）
+    // 类似SOEM 的ecx_parentport()
     fn next_assignable_port(&mut self, this_port: &Port) -> Option<&mut Port> {
         // 端口序号转换到端口数组Ports的下标
         let this_port_index = this_port.index();
@@ -193,14 +196,16 @@ impl Ports {
         downstream_subdevice_index: NonZeroU16,
     ) -> Option<u8> {
         // 获取当前设备中第一个接收到 EtherCAT 流量的端口，该端口是流量进入设备的入口
+        // TODO 这种写法可以适用反向模式。
         let entry_port = self.entry_port();
 
         // 找出下一个还未被指定为其他从设备（SubDevice）上游端口的端口
         let next_port = self.next_assignable_port(&entry_port)?;
 
         // 将本端口分配给下游从站
-        // 需要考证为什么下一个还未被指定为其他从设备（SubDevice）上游端口的端口，就是寻找的要连接的端口
-        // 接错的情况下又会发生什么？
+        // 需要考证为什么下一个还未被指定为其他从设备（SubDevice）上游端口的端口，就是寻找的要连接的端口。
+        // 因为设置顺序是按照帧流向的顺序。端口顺序也是帧流向的顺序，所以这个机制正确
+        // TODO 接错的情况下又会发生什么？
         next_port.downstream_to = Some(downstream_subdevice_index);
 
         // 返回端口序号
@@ -208,7 +213,7 @@ impl Ports {
     }
 
     /// Find the port assigned to the given SubDevice.
-    // 通过父从站的端口连接的从站索引找到在当前 Ports 实例里分配给指定从站的端口
+    // 通过从站索引找到在父从站的端口 Ports 实例里分配给当前从站的端口
     pub fn port_assigned_to(&self, subdevice: &SubDevice) -> Option<&Port> {
         self.active_ports()
             .find(|port| port.downstream_to.map(|idx| idx.get()) == Some(subdevice.index))
@@ -233,15 +238,16 @@ impl Ports {
     }
 
     /// The time in nanoseconds for a packet to completely traverse all active ports of a SubDevice.
-    // 计算从站4个端口最大和最小接收时间的差值，就是帧在从站之后网络传输的时间
+    // 计算从站有物理连接的端口最大和最小接收时间的差值，就是帧在从站之后网络传输的时间
     // 如果假设线缆延迟均匀，并且所有从站设备的处理和转发延迟一样
+    // TODO 如果从站是最后一个从站，则改从站之后的传播时间为0.
     #[deny(clippy::arithmetic_side_effects)] // 禁止可能产生意外算术副作用（如整数溢出、下溢）的操作
     pub fn total_propagation_time(&self) -> Option<u32> {
         // 得到一个只包含激活端口接收时间的迭代器
         let times = self
             .0
             .iter()
-            .filter_map(|port| port.active.then_some(port.dc_receive_time));
+            .filter_map(|port| port.active.then_some(port.receive_time));
 
         // 计算最大和最小接收时间的差值
         times
@@ -251,33 +257,41 @@ impl Ports {
             .filter(|t| *t > 0)
     }
 
+    // 计算当前子设备的端口0到指定目标端口之间的传播时间总和（不含指定端口的时间）。
+    // 如果前面有分叉端口，也包括分叉端口的传播时间
+    // TODO 两两端口之间做差值再求和的写法可以适应数据不从0端口开始的情况？
     /// Propagation time between active ports in this SubDevice.
-    #[deny(clippy::arithmetic_side_effects)]
+    #[deny(clippy::arithmetic_side_effects)] // 防止算术溢出
     pub fn intermediate_propagation_time_to(&self, port: &Port) -> u32 {
         // If a pair of ports is open, they have a propagation delta between them, and we can sum
         // these deltas up to get the child delays of this SubDevice (fork or cross have children)
         self.0
+            // 创建相邻端口对的滑动窗口（获取一个数组中的两个连续元素）
             .windows(2)
             .map(|window| {
                 // Silly Rust
                 let [a, b] = window else { return 0 };
 
                 // Stop iterating as we've summed everything before the target port
+                // 停止迭代，因为我们已经汇总了目标端口之前的所有端口
                 if a.index() >= port.index() {
                     return 0;
                 }
 
                 // Both ports must be active to have a delta
+                // 两个端口都必须处于活动状态才能有传播时间差
                 if a.active && b.active {
-                    b.dc_receive_time.saturating_sub(a.dc_receive_time)
+                    // TODO 检查时间大小关系？
+                    b.receive_time.saturating_sub(a.receive_time)
                 } else {
                     0
                 }
             })
+            // 对迭代器中的每个元素求和，即将所有时间差求和
             .sum::<u32>()
     }
 
-    // 计算 EtherCAT 流量进入当前从站的入口端口，到指定端口的传播时间
+    // 计算 EtherCAT 流量进入当前从站的入口端口，到指定端口之间最大传播时间
     /// Get the propagation time taken from entry to this SubDevice up to the given port.
     #[deny(clippy::arithmetic_side_effects)] // 禁止可能产生意外算术副作用（如整数溢出、下溢）的操作
     pub fn propagation_time_to(&self, this_port: &Port) -> Option<u32> {
@@ -285,14 +299,14 @@ impl Ports {
         let entry_port = self.entry_port();
 
         // Find active ports between entry and this one
-        // 返回map,其中包含各端口帧接收时间
+        // 返回map,其中包含指定端口及之前各端口帧接收时间
         let times = self
             .active_ports()
             // 只要端口的数组下标大于等于入口端口下标,小于等于指定端口下标的端口
             // TODO:这个筛选规则是否合理?如果入口端口一定是0(不能适应网线反接的情况),则正确
             // TODO:如果网线反接,则端口的数组应该设置为一个循环数组,这个判断规则需要修改
             .filter(|port| port.index() >= entry_port.index() && port.index() <= this_port.index())
-            .map(|port| port.dc_receive_time);
+            .map(|port| port.receive_time);
 
         times
             .clone()
@@ -313,10 +327,10 @@ pub mod tests {
     pub(crate) fn make_ports(active0: bool, active3: bool, active1: bool, active2: bool) -> Ports {
         let mut ports = Ports::new(active0, active3, active1, active2);
 
-        ports.0[0].dc_receive_time = ENTRY_RECEIVE;
-        ports.0[1].dc_receive_time = ENTRY_RECEIVE + 100;
-        ports.0[2].dc_receive_time = ENTRY_RECEIVE + 200;
-        ports.0[3].dc_receive_time = ENTRY_RECEIVE + 300;
+        ports.0[0].receive_time = ENTRY_RECEIVE;
+        ports.0[1].receive_time = ENTRY_RECEIVE + 100;
+        ports.0[2].receive_time = ENTRY_RECEIVE + 200;
+        ports.0[3].receive_time = ENTRY_RECEIVE + 300;
 
         ports
     }
@@ -357,7 +371,7 @@ pub mod tests {
             Port {
                 active: true,
                 number: 0,
-                dc_receive_time: ENTRY_RECEIVE,
+                receive_time: ENTRY_RECEIVE,
                 ..Port::default()
             }
         );
@@ -396,7 +410,7 @@ pub mod tests {
             ports.entry_port(),
             Port {
                 active: true,
-                dc_receive_time: ENTRY_RECEIVE,
+                receive_time: ENTRY_RECEIVE,
                 number: 0,
                 downstream_to: None
             }
@@ -416,25 +430,25 @@ pub mod tests {
                 // Entry port
                 Port {
                     active: true,
-                    dc_receive_time: ENTRY_RECEIVE,
+                    receive_time: ENTRY_RECEIVE,
                     number: 0,
                     downstream_to: None,
                 },
                 Port {
                     active: true,
-                    dc_receive_time: ENTRY_RECEIVE + 100,
+                    receive_time: ENTRY_RECEIVE + 100,
                     number: 3,
                     downstream_to: Some(NonZeroU16::new(1).unwrap()),
                 },
                 Port {
                     active: true,
-                    dc_receive_time: ENTRY_RECEIVE + 200,
+                    receive_time: ENTRY_RECEIVE + 200,
                     number: 1,
                     downstream_to: Some(NonZeroU16::new(2).unwrap()),
                 },
                 Port {
                     active: false,
-                    dc_receive_time: ENTRY_RECEIVE + 300,
+                    receive_time: ENTRY_RECEIVE + 300,
                     number: 2,
                     downstream_to: None,
                 }

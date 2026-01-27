@@ -391,6 +391,7 @@ pub enum DcSupport {
 }
 
 impl DcSupport {
+    // 判断是否支持DC，不管时钟位数
     /// Reference only, 32 or 64 bit counters.
     pub fn any(&self) -> bool {
         match self {

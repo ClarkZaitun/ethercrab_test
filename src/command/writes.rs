@@ -51,6 +51,7 @@ pub struct WrappedWrite {
     pub command: Writes,
     /// Expected working counter.
     wkc: Option<u16>,
+    // 数据长度。如果给定了数据长度，则使用给定的数据长度；否则使用数据的实际长度。
     len_override: Option<u16>,
 }
 

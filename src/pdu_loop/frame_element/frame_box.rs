@@ -88,6 +88,7 @@ impl<'sto> FrameBox<'sto> {
 
     // 原子性地获取并递增数据报index
     pub fn next_pdu_idx(&self) -> u8 {
+        // 注意：返回加之前的值
         self.pdu_idx.fetch_add(1, Ordering::Relaxed)
     }
 

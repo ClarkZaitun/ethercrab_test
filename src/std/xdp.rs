@@ -219,7 +219,7 @@ pub fn tx_rx_task_xdp<'sto>(
         // 从 XDP 接收队列中轮询并消费已接收的数据包
         // poll_and_consume 将接收到的数据包描述符所有权从内核转移到用户空间
         // 参数 0 表示非阻塞轮询，立即返回
-        // 返回值 pkts_recvd 表示成功接收的数据包数量
+        // 返回值 pkts_recvd 表示成功接收的数据包数量Pre
         let pkts_recvd = unsafe { xsk.rx_q.poll_and_consume(&mut rx_descs, 0).unwrap() };
 
         // 遍历所有接收到的数据包描述符，使用 take(pkts_recvd) 确保只处理实际接收到的数据包

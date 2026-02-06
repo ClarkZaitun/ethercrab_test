@@ -311,6 +311,7 @@ impl<'sto> MainDevice<'sto> {
 
         fmt::debug!("Configuring topology/distributed clocks");
 
+        // TODO 先检查
         // Configure distributed clock offsets/propagation delays, perform static drift
         // compensation. We need the SubDevices in a single list so we can read the topology.
         // 配置分布时钟偏移/传播延迟，执行静态漂移补偿。我们需要将子设备放在一个列表中，以便读取拓扑结构。

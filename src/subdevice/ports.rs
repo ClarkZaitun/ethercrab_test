@@ -240,7 +240,7 @@ impl Ports {
     /// The time in nanoseconds for a packet to completely traverse all active ports of a SubDevice.
     // 计算从站有物理连接的端口最大和最小接收时间的差值，就是帧在从站之后网络传输的时间
     // 如果假设线缆延迟均匀，并且所有从站设备的处理和转发延迟一样
-    // TODO 如果从站是最后一个从站，则改从站之后的传播时间为0.
+    // 如果从站只有一个打开的端口，则此函数返回0.
     #[deny(clippy::arithmetic_side_effects)] // 禁止可能产生意外算术副作用（如整数溢出、下溢）的操作
     pub fn total_propagation_time(&self) -> Option<u32> {
         // 得到一个只包含激活端口接收时间的迭代器
@@ -250,6 +250,7 @@ impl Ports {
             .filter_map(|port| port.active.then_some(port.receive_time));
 
         // 计算最大和最小接收时间的差值
+        // 如果只有一个端口，则最大值和最小值相等，差值为0。直接返回0更高效
         times
             .clone() // 由于迭代器是消耗性的，调用 max 方法会消耗迭代器
             .max() // 在克隆的迭代器中查找最大的接收时间

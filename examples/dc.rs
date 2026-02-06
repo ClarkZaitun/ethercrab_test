@@ -344,6 +344,7 @@ fn main() -> Result<(), Error> {
                 &maindevice,
                 DcConfiguration {
                     // Start SYNC0 100ms in the future
+                    // 0x990延迟时间
                     start_delay: Duration::from_millis(100),
                     // SYNC0 period should be the same as the process data loop in most cases
                     sync0_period: TICK_INTERVAL,
@@ -375,21 +376,30 @@ fn main() -> Result<(), Error> {
         // Send PDI and check group state until all SubDevices enter OP state. At this point, we can
         // exit this loop and enter the main process data loop that does not have the state check
         // overhead present here.
+        // 主循环：等待所有从站进入运行状态
+        // 使用分布式时钟同步机制，确保每次数据交换都在精确的时间点进行
         loop {
             let now = Instant::now();
 
             let response @ TxRxResponse {
                 working_counter: _wkc,
-                extra: CycleInfo {
-                    next_cycle_wait, ..
-                },
+                // 从tx_rx_dc函数获取时间同步信息
+                extra:
+                    CycleInfo {
+                        // 从时间同步算法计算出的下一次循环等待时间
+                        next_cycle_wait,
+                        ..
+                    },
                 ..
             } = group.tx_rx_dc(&maindevice).await.expect("TX/RX");
 
+            // 检查所有从站是否都进入了运行状态(OP)
             if response.all_op() {
                 break;
             }
 
+            // 根据时间同步算法计算出的等待时间进行精确延时
+            // 确保下一次循环在正确的时间点执行，与网络同步
             smol::Timer::at(now + next_cycle_wait).await;
         }
 
@@ -442,7 +452,8 @@ fn main() -> Result<(), Error> {
         // PD cycle counter used for stats graph X axes
         let mut cycle = 0;
 
-        // Main application process data cycle
+        // 主应用程序数据循环：使用分布式时钟同步进行精确的时间控制
+        // 这是实时控制循环的核心，确保数据在准确的时间点传输
         loop {
             let now = Instant::now();
 
@@ -450,8 +461,11 @@ fn main() -> Result<(), Error> {
                 working_counter: _wkc,
                 extra:
                     CycleInfo {
+                        // 当前的分布式时钟系统时间
                         dc_system_time,
+                        // 从时间同步算法计算出的下次循环等待时间
                         next_cycle_wait,
+                        // 当前循环相对于周期起始的偏移
                         cycle_start_offset,
                     },
                 ..

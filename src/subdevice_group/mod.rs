@@ -125,9 +125,12 @@ pub struct NoDc;
 /// This typestate can be entered by calling [`SubDeviceGroup::configure_dc_sync`].
 #[derive(Copy, Clone, Debug)]
 pub struct HasDc {
+    // SYNC0周期时间
     sync0_period: u64,
+    // SYNC0偏移时间
     sync0_shift: u64,
     /// Configured address of the DC reference SubDevice.
+    // 参考时钟配置地址
     reference: u16,
 }
 
@@ -161,15 +164,18 @@ const SYNC1_ACTIVATE: u8 = 0b0000_0100;
 #[derive(Default, Debug, Copy, Clone)]
 pub struct DcConfiguration {
     /// How long the SubDevices in the group should wait before starting SYNC0 pulse generation.
+    // 0x990延迟时间
     pub start_delay: Duration,
 
     /// SYNC0 cycle time.
     ///
     /// SubDevices with an `AssignActivate` value of `0x0300` in their ESI definition should set
     /// this value.
+    // 0x9A0
     pub sync0_period: Duration,
 
     /// Shift time relative to SYNC0 pulse.
+    // 偏移时间
     pub sync0_shift: Duration,
 }
 
@@ -1076,6 +1082,7 @@ where
         })
     }
 
+    // DC模式，但没有带SYNC0 同步
     // 发送 FRMW 0x0910 LRW 和 FPRD 0x0130 命令
     /// Drive the SubDevice group's inputs and outputs and synchronise EtherCAT system time with
     /// `FRMW`.
@@ -1165,16 +1172,20 @@ where
                     });
                 }
 
+                // 标记周期帧为可发送,返回ReceiveFrameFut
                 let frame = frame.mark_sendable(
                     &maindevice.pdu_loop,
                     maindevice.timeouts.pdu(),
                     maindevice.config.retry_behaviour.retry_count(),
                 );
 
+                // 唤醒socket poll发帧，收帧
                 maindevice.pdu_loop.wake_sender();
 
+                // 等待接收完成
                 let received = frame.await?;
 
+                // 用于处理一帧多个数据报的情况：转换为数据报迭代器
                 let mut pdus = received.into_pdu_iter();
 
                 if dc_handle.is_some() {
@@ -1259,6 +1270,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, S>
 where
     S: HasPdi,
 {
+    // DC模式，带SYNC0 同步。周期收发帧函数
     /// Drive the SubDevice group's inputs and outputs, synchronise EtherCAT system time with
     /// `FRMW`, and return cycle timing and SubDevice state information.
     ///
@@ -1378,6 +1390,7 @@ where
             self.read_pdi_len
         );
 
+        // 获得PDI数据区的读写锁
         let mut pdi_lock = self.pdi.write();
 
         let mut total_bytes_sent = 0;
@@ -1390,6 +1403,7 @@ where
         let mut subdevice_states = heapless::Vec::<_, MAX_SUBDEVICES>::new();
 
         loop {
+            // 分配一个帧
             let mut frame = maindevice.pdu_loop.alloc_frame()?;
 
             let dc_handle = if !time_read {
@@ -1422,6 +1436,7 @@ where
                 None
             };
 
+            // 状态检查
             // If there's space left, push as many state checks as we can into the frame
             let (rest, num_checks_in_this_frame) = push_state_checks(subdevices, &mut frame)?;
             subdevices = rest;
@@ -1446,11 +1461,13 @@ where
             if dc_handle.is_some() {
                 let dc_pdu = pdus.next().ok_or(Error::Internal)?;
 
+                // 获得参考时钟时间
                 time = dc_pdu.and_then(|rx| u64::unpack_from_slice(&rx).map_err(Error::from))?;
 
                 time_read = true;
             }
 
+            // 获得PDI数据区的读写锁
             // If we pushed a non-zero amount of PDI bytes, process the response
             if let Some((bytes_in_this_chunk, _pdu_handle)) = pushed_chunk {
                 let wkc = self.process_received_pdi_chunk(
@@ -1464,6 +1481,7 @@ where
                 lrw_wkc_sum += wkc;
             }
 
+            // 获得从站状态
             // If there are any more PDUs, these are state checks
             for state_check_pdu in pdus {
                 let state_check_pdu = state_check_pdu?;
@@ -1482,10 +1500,18 @@ where
             }
         }
 
-        // Nanoseconds from the start of the cycle. This works because the first SYNC0 pulse
-        // time is rounded to a whole number of `sync0_period`-length cycles.
+        // 分布式时钟时间同步算法核心逻辑
+        // 根据参考时钟从站的系统时间，计算主设备下一次数据交换的精确时机
+        // 这个算法确保主设备与网络中的SYNC0脉冲保持同步，实现精确的实时控制
+
+        // 计算当前时间距离当前周期起始点的偏移量
+        // 例如：如果周期是1ms，当前时间是1234567ns，那么偏移量是234567ns
+        // 从周期开始算起的纳秒数。这样做的原因是第一个 SYNC0 脉冲的时间被四舍五入到 `sync0_period` 长度的周期的整数倍。
         let cycle_start_offset = time % self.dc_conf.sync0_period;
 
+        // 计算到下一个周期开始还需等待的时间，加上用户设定的偏移量
+        // 这样可以确保主设备在指定的时间点进行数据交换，与网络的SYNC0脉冲保持同步
+        // 公式：(完整周期时间 - 当前周期已过去的时间) + 用户指定的偏移时间
         let time_to_next_iter =
             (self.dc_conf.sync0_period - cycle_start_offset) + self.dc_conf.sync0_shift;
 

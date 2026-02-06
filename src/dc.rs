@@ -290,11 +290,12 @@ fn configure_subdevice_offsets(
         parent_port.number,
         subdevice.name(),
         this_port.number,
-        subdevice.is_child_of(parent) // 检查当前子设备是否为“父设备”的子设备，判断方法还需要考证
+        subdevice.is_child_of(parent) // 检查当前子设备是否为“父设备”中间端口连接的子设备
     );
 
-    // 计算从站4个端口最大和最小接收时间的差值，就是帧在从站之后网络传输的时间
+    // TODO 父从站传播时间应该为：父DC从站连接端口与前一个端口时间差。而不是所有端口的最大和最小接收时间差，因此在后文处理
     let parent_prop_time = parent.ports.total_propagation_time().unwrap_or(0);
+    // 计算当前从站4个端口最大和最小接收时间的差值，就是帧在从站之后网络传输的时间
     let this_prop_time = subdevice.ports.total_propagation_time().unwrap_or(0);
 
     // 帧在两个从站之间来回的总时间
@@ -307,13 +308,13 @@ fn configure_subdevice_offsets(
         parent_delta
     );
 
-    // 不同拓扑计算传播延迟的公式不同
+    // 父从站不同拓扑计算传播延迟的公式不同
     // 假设线缆延迟均匀，并且所有从站设备的处理和转发延迟一样
     // TODO：需要再做功课确认
     // Divide by two here as the propagation times are for a loop, i.e. out _and back again_. We
     // only want one side of the loop.
     let propagation_delay = match parent.ports.topology() {
-        Topology::Passthrough => parent_delta / 2, //直接除2就是传播延迟
+        Topology::Passthrough => parent_delta / 2, //确认正确：除2就是传播延迟
         Topology::Fork => {
             if subdevice.is_child_of(parent) {
                 // 计算 EtherCAT 流量进入当前从站的入口端口，到指定端口的传播时间
@@ -321,12 +322,16 @@ fn configure_subdevice_offsets(
 
                 children_loop_time.saturating_sub(this_prop_time) / 2
             } else {
-                // 当作Passthrough处理
+                // 错误：当作Passthrough处理
+                // TODO 父从站传播时间应该为：父DC从站连接端口与前一个端口时间差。而不是所有端口的最大和最小接收时间差
+                // 此处需要扣除端口时间差的其他部分
                 parent_delta / 2
             }
         }
         Topology::Cross => {
             if subdevice.is_child_of(parent) {
+                // 计算当前子设备的端口0到指定目标端口之间的传播时间总和（不含指定端口的时间）。
+                // 如果前面有分叉端口，也包括分叉端口的传播时间
                 let children_loop_time = parent.ports.intermediate_propagation_time_to(parent_port);
 
                 children_loop_time.saturating_sub(this_prop_time) / 2
@@ -341,6 +346,7 @@ fn configure_subdevice_offsets(
         Topology::LineEnd => 0,
     };
 
+    // NOTE 不需要考虑溢出的情况，即传播延迟大于4s，因为从站的传播延迟寄存器为 u32
     *delay_accum = delay_accum.saturating_add(propagation_delay);
 
     fmt::debug!(
@@ -475,6 +481,7 @@ fn assign_parent_relationships(subdevices: &mut [SubDevice]) -> Result<(), Error
     Ok(())
 }
 
+// 时钟初始化：还原网络拓扑，测量传播延迟，初始偏移计算，补偿延迟和偏移
 /// Configure distributed clocks.
 ///
 /// This method walks through the discovered list of devices and sets the system time offset and
@@ -493,6 +500,7 @@ pub(crate) async fn configure_dc<'subdevices>(
 
     // 查找第一个支持 DC 的从站
     // TODO 优化：开发接口允许指定参考时钟
+    // 参考时钟在这函数内只用于打印信息，可以剥离
     let first_dc_subdevice = subdevices
         .iter()
         .find(|subdevice| subdevice.dc_support().any());
@@ -502,7 +510,7 @@ pub(crate) async fn configure_dc<'subdevices>(
         let now_nanos = now();
 
         // 对支持DC的从站，设置时钟偏移和传播延迟
-        // 非DC从站的行为会如何？不需要处理
+        // TODO 非DC从站，未配置DC模式的从站的行为会如何？不需要处理
         for subdevice in subdevices.iter().filter(|sl| sl.dc_support().any()) {
             // 设置时钟偏移和传播延迟
             write_dc_parameters(

@@ -1,15 +1,15 @@
-max_width = 120
-tab_spaces = 4
-newline_style = "Unix"
-use_small_heuristics = "Max"
-reorder_imports = true
-reorder_modules = false
-fn_call_width = 100
-struct_lit_width = 0
-struct_variant_width = 0
-array_width = 40
-chain_width = 40
-single_line_if_else_max_width = 0
+# max_width = 120
+# tab_spaces = 4
+# newline_style = "Unix"
+# use_small_heuristics = "Max"
+# reorder_imports = true
+# reorder_modules = false
+# fn_call_width = 100
+# struct_lit_width = 0
+# struct_variant_width = 0
+# array_width = 40
+# chain_width = 40
+# single_line_if_else_max_width = 0
 
 # 控制导入分组的粒度级别：
 # "Crate"：按 crate 名称分组（例如所有 std:: 导入放在一起，所有 tokio:: 导入放在一起）

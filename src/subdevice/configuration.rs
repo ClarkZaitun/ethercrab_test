@@ -40,7 +40,7 @@ where
         let sync_managers = self.eeprom().sync_managers().await?;
 
         // Mailboxes must be configured in INIT state
-        // 配置SM0和SM1给邮箱。会检查是否支持邮箱，不支持就不配置。生成邮箱的配置信息保存到从站
+        // 配置SM0和SM1给邮箱。会检查是否支持邮箱，不支持就不配置。生成邮箱的配置信息保存到从站结构体
         self.configure_mailbox_sms(&sync_managers).await?;
 
         // Some SubDevices must be in PDI EEPROM mode to transition from INIT to PRE-OP. This is
@@ -82,6 +82,8 @@ where
         // 读取从站状态
         let state = self.state().await?;
 
+        // 检查从站是否在PreOp状态，不是就报错
+        // TODO 这个检查可以放到周期帧中，定期检查从站状态
         if state != SubDeviceState::PreOp {
             fmt::error!(
                 "SubDevice {:#06x} is in invalid state {}. Expected {}",
@@ -106,9 +108,12 @@ where
             has_coe
         );
 
+        // 在运行这个函数之前，用户在用户的程序中已经通过SDO配置了PDO，因此可以根据PDO配置，设置FMMU
         // 发送配置PDO 的命令，修改 global_offset
+        // TODO 这里可能有问题：如果从站支持可变PDO，则不能通过EEPROM信息配置FMMU，因为用户可能通过CoE或者SoE动态配置PDO
         let range = if has_coe {
             // 通过读取CoE对象字典，配置PDO，返回PDO在PDI的地址范围
+            // TODO 优化：用户配置PDO时，就可以知道IO配置。因此此函数中不需要读取PDO配置，直接根据FMMU配置即可
             self.configure_pdos_coe(&sync_managers, &fmmu_usage, direction, &mut global_offset)
                 .await?
         } else {
@@ -118,6 +123,7 @@ where
         };
 
         // 计算PDO范围
+        // 给从站结构体的config.io赋值
         match direction {
             PdoDirection::MasterRead => {
                 self.state.config.io.input = PdiSegment {
@@ -274,6 +280,7 @@ where
             }
         }
 
+        // 给从站结构中的 config 的邮箱赋值
         self.state.config.mailbox = MailboxConfig {
             read: read_mailbox,
             write: write_mailbox,
@@ -342,7 +349,7 @@ where
             }
 
             // Total number of PDO assignments for this sync manager
-            // 读取这个SM通道分配的PDO数量
+            // 读取这个SM通道分配的PDO数量（即子索引0保存的数字）
             let num_sm_assignments = self
                 // SDO快速传输上传
                 .sdo_read_expedited::<u8>(sm_address, SubIndex::Index(0))
@@ -364,7 +371,7 @@ where
                 let pdo = self
                     .sdo_read_expedited::<u16>(sm_address, SubIndex::Index(i))
                     .await?;
-                // 读取PDO映射对象索引包含的Entry数量
+                // 读取PDO映射对象索引包含的Entry数量（即子索引0保存的数字）
                 let num_mappings = self
                     .sdo_read_expedited::<u8>(pdo, SubIndex::Index(0))
                     .await?;

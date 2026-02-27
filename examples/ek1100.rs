@@ -34,7 +34,7 @@ const MAX_PDU_DATA: usize = PduStorage::element_size(1100); //1100+28
 /// Maximum number of EtherCAT frames that can be in flight at any one time.
 const MAX_FRAMES: usize = 16;
 /// Maximum total PDI length.
-// 组的过程数据映像（PDI）的最大字节数。用于设置 SubDeviceGroup 的 max_pdi_len 字段
+// 每个组的过程数据映像（PDI）的最大字节数。用于设置 SubDeviceGroup 的 max_pdi_len 字段
 const PDI_LEN: usize = 64;
 
 static PDU_STORAGE: PduStorage<MAX_FRAMES, MAX_PDU_DATA> = PduStorage::new();
@@ -96,6 +96,8 @@ async fn main() -> Result<(), Error> {
     log::info!("Discovered {} SubDevices", group.len());
 
     // 对每个从站配置PDO
+    // TODO 配置PDO的过程应该封装成接口，用户只需要设置PDO的Entry，具体SDO如何发送配置由库实现。
+    // 此时库可以知道PDO映射关系，得到PDI分布，从而可以配置FMMU
     for subdevice in group.iter(&maindevice) {
         // 改为匹配vendor id和product code更合理
         if subdevice.name() == "EL3004" {

@@ -150,9 +150,10 @@ pub trait IsPreOp {}
 impl IsPreOp for PreOp {}
 impl IsPreOp for PreOpPdi {}
 
+// 保存组的从站数组和PDI起始偏移量
 #[derive(Default)]
 struct GroupInner<const MAX_SUBDEVICES: usize> {
-    subdevices: heapless::Vec<SubDevice, MAX_SUBDEVICES>, // 从站数组
+    subdevices: heapless::Vec<SubDevice, MAX_SUBDEVICES>, // 当前组的从站数组
     pdi_start: PdiOffset, // 当前组的 PDI 起始偏移量，也是逻辑地址。逻辑地址从0开始
 }
 
@@ -346,7 +347,9 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, DC>
         self,
         maindevice: &MainDevice<'_>,
     ) -> Result<SubDeviceGroup<MAX_SUBDEVICES, MAX_PDI, R, Op, DC>, Error> {
-        // 没有设置SYNC
+        // SYNC的设置在用户程序中，不在库中
+        // PDO的配置在用户程序中，不在库中
+        // 切换到 Safe Op时会配置FMMU，同时会设置PDI
         let self_ = self.into_safe_op(maindevice).await?;
 
         self_.into_op(maindevice).await
@@ -376,7 +379,6 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, DC>
         })
     }
 
-    // 没有设置SYNC
     /// Transition the SubDevice group from PRE-OP to SAFE-OP.
     pub async fn into_safe_op(
         self,
@@ -518,6 +520,7 @@ where
                 .await?;
 
             // 计算出 0x990 同步起始时间
+            // 从站当前时间 + 首次脉冲延迟，然后四舍五入到一个完整的周期
             // Round first pulse time to a whole number of cycles
             let start_time = (system_time + first_pulse_delay) / sync0_period * sync0_period;
 
@@ -702,6 +705,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, S> Default
     }
 }
 
+// 通用实现，没有DC和状态的限制
 impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, S, DC>
     SubDeviceGroup<MAX_SUBDEVICES, MAX_PDI, R, S, DC>
 {
@@ -897,6 +901,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, S, DC>
 where
     S: HasPdi,
 {
+    // 用户程序中可以通过索引获取从站引用，然后读写PDO
     /// Borrow an individual SubDevice.
     #[doc(alias = "slave")]
     pub fn subdevice<'maindevice, 'group>(
@@ -911,6 +916,7 @@ where
 
         let io_ranges = subdevice.io_segments().clone();
 
+        // 获取的变量只用于打印
         let IoRanges {
             input: input_range,
             output: output_range,
@@ -928,6 +934,7 @@ where
         Ok(SubDeviceRef::new(
             maindevice,
             subdevice.configured_address(),
+            // TODO 这里可以传入 io_ranges ，限定PDI的范围，只给当前从站使用
             SubDevicePdi::new(subdevice, &self.pdi),
         ))
     }
@@ -1507,11 +1514,12 @@ where
         // 计算当前时间距离当前周期起始点的偏移量
         // 例如：如果周期是1ms，当前时间是1234567ns，那么偏移量是234567ns
         // 从周期开始算起的纳秒数。这样做的原因是第一个 SYNC0 脉冲的时间被四舍五入到 `sync0_period` 长度的周期的整数倍。
+        // TODO 这里的time是64位，32位的情况没有考虑
         let cycle_start_offset = time % self.dc_conf.sync0_period;
 
         // 计算到下一个周期开始还需等待的时间，加上用户设定的偏移量
         // 这样可以确保主设备在指定的时间点进行数据交换，与网络的SYNC0脉冲保持同步
-        // 公式：(完整周期时间 - 当前周期已过去的时间) + 用户指定的偏移时间
+        // 公式： 本周期休眠时间 = (完整周期时间 - 当前周期已过去的时间) + 用户指定的偏移时间
         let time_to_next_iter =
             (self.dc_conf.sync0_period - cycle_start_offset) + self.dc_conf.sync0_shift;
 

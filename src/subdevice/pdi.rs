@@ -1,3 +1,5 @@
+// 此模块提供了对 EtherCAT 子设备 PDI (Process Data Image) 的访问。从从站组创建从站引用类型时，会自动创建对 PDI 的访问 guard。
+
 use super::{IoRanges, SubDevice, SubDeviceRef};
 use crate::subdevice_group::MySyncUnsafeCell;
 use core::{
@@ -28,16 +30,35 @@ pub struct PdiIoRawReadGuard<'a, const N: usize, R: RawRwLock> {
     _lt: PhantomData<&'a ()>,
 }
 
+/// 对 PDI (Process Data Image) 的只读访问 guard
+///
+/// 提供对 PDI 中输入和输出数据的安全读取能力
 impl<const N: usize, R: RawRwLock> PdiIoRawReadGuard<'_, N, R> {
+    /// 获取 PDI 中输入数据的只读字节切片
+    ///
+    /// 输入数据是从从站设备读取到主站的数据
+    ///
+    /// # Returns
+    /// - 包含输入数据的字节切片
     pub fn inputs(&self) -> &[u8] {
+        // 获取整个 PDI 数据的引用
         let all = unsafe { &*self.lock.get() }.as_slice();
 
+        // 根据输入数据的范围返回相应的切片
         &all[self.ranges.input.bytes.clone()]
     }
 
+    /// 获取 PDI 中输出数据的只读字节切片
+    ///
+    /// 输出数据是从主站发送到从站设备的数据
+    ///
+    /// # Returns
+    /// - 包含输出数据的字节切片
     pub fn outputs(&self) -> &[u8] {
+        // 获取整个 PDI 数据的引用
         let all = unsafe { &*self.lock.get() }.as_slice();
 
+        // 根据输出数据的范围返回相应的切片
         &all[self.ranges.output.bytes.clone()]
     }
 }
@@ -48,16 +69,35 @@ pub struct PdiIoRawWriteGuard<'a, const N: usize, R: RawRwLock> {
     _lt: PhantomData<&'a ()>,
 }
 
+/// 对 PDI (Process Data Image) 的可写访问 guard
+///
+/// 提供对 PDI 中输入数据的只读访问和输出数据的可写访问
 impl<const N: usize, R: RawRwLock> PdiIoRawWriteGuard<'_, N, R> {
+    /// 获取 PDI 中输入数据的只读字节切片
+    ///
+    /// 输入数据是从从站设备读取到主站的数据，通常为只读
+    ///
+    /// # Returns
+    /// - 包含输入数据的字节切片
     pub fn inputs(&self) -> &[u8] {
+        // 获取整个 PDI 数据的引用
         let all = unsafe { &*self.lock.get() }.as_slice();
 
+        // 根据输入数据的范围返回相应的切片
         &all[self.ranges.input.bytes.clone()]
     }
 
+    /// 获取 PDI 中输出数据的可写字节切片
+    ///
+    /// 输出数据是从主站发送到从站设备的数据，需要可写
+    ///
+    /// # Returns
+    /// - 包含输出数据的可写字节切片
     pub fn outputs(&mut self) -> &mut [u8] {
+        // 获取整个 PDI 数据的可变引用
         let all = unsafe { &mut *self.lock.get() }.as_mut_slice();
 
+        // 根据输出数据的范围返回相应的可变切片
         &mut all[self.ranges.output.bytes.clone()]
     }
 }
@@ -84,12 +124,15 @@ impl<const N: usize, R: RawRwLock> DerefMut for PdiWriteGuard<'_, N, R> {
     }
 }
 
+// 从站组的从站和PDI引用
 /// Process Data Image (PDI) segments for a given SubDevice.
 ///
 /// Used in conjunction with [`SubDeviceRef`].
 #[doc(alias = "SlavePdi")]
 pub struct SubDevicePdi<'group, const MAX_PDI: usize, R: RawRwLock> {
     subdevice: &'group SubDevice,
+    // 从站组的PDI引用，注意这里是整个PDI，而不是从站的PDI。所以这里锁的颗粒很大，一般不建议在多个线程中同时读写PDI
+    // TODO 这里可以限定PDI的范围，只给当前从站使用
     pdi: &'group RwLock<R, MySyncUnsafeCell<[u8; MAX_PDI]>>,
 }
 
@@ -113,8 +156,10 @@ impl<'group, const MAX_PDI: usize, R: RawRwLock> SubDevicePdi<'group, MAX_PDI, R
     }
 }
 
+// TODO 这里的几个方法的锁颗粒度大，而且获取PDO范围时没必要获取锁。需要写数据到帧时，如果周期帧获取不到锁，就不更新PDO数据
 /// Methods used when a SubDevice is part of a group and part of the PDI has been mapped to it.
 impl<const MAX_PDI: usize, R: RawRwLock> SubDeviceRef<'_, SubDevicePdi<'_, MAX_PDI, R>> {
+    /// 获取此子设备的PDI写锁和输入输出PDO范围
     /// Get a reference to the raw inputs and outputs for this SubDevice in the Process Data Image
     /// (PDI). The inputs are read-only, while the outputs can be mutated.
     ///
@@ -145,6 +190,7 @@ impl<const MAX_PDI: usize, R: RawRwLock> SubDeviceRef<'_, SubDevicePdi<'_, MAX_P
         }
     }
 
+    /// 获取此子设备的PDI读锁和输入输出PDO范围
     /// Get a reference to both the inputs and outputs for this SubDevice in the Process Data Image
     /// (PDI).
     ///
@@ -184,6 +230,7 @@ impl<const MAX_PDI: usize, R: RawRwLock> SubDeviceRef<'_, SubDevicePdi<'_, MAX_P
         }
     }
 
+    /// 获取此子设备的PDI读锁和输入PDO范围
     /// Get a reference to the raw input data for this SubDevice in the Process Data Image (PDI).
     pub fn inputs_raw(&self) -> PdiReadGuard<'_, MAX_PDI, R> {
         PdiReadGuard {
@@ -193,6 +240,7 @@ impl<const MAX_PDI: usize, R: RawRwLock> SubDeviceRef<'_, SubDevicePdi<'_, MAX_P
         }
     }
 
+    /// 获取此子设备的PDI读锁和输出PDO范围
     /// Get a reference to the raw output data for this SubDevice in the Process Data Image (PDI).
     pub fn outputs_raw(&self) -> PdiReadGuard<'_, MAX_PDI, R> {
         PdiReadGuard {
@@ -202,6 +250,7 @@ impl<const MAX_PDI: usize, R: RawRwLock> SubDeviceRef<'_, SubDevicePdi<'_, MAX_P
         }
     }
 
+    /// 获取此子设备的PDI写锁和输出PDO范围
     /// Get a mutable reference to the raw output data for this SubDevice in the Process Data Image
     /// (PDI).
     pub fn outputs_raw_mut(&self) -> PdiWriteGuard<'_, MAX_PDI, R> {

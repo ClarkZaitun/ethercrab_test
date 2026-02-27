@@ -381,6 +381,9 @@ fn main() -> Result<(), Error> {
         loop {
             let now = Instant::now();
 
+            // @ 符号实现了两个功能：
+            // 绑定整个值：将 tx_rx_dc 函数返回的完整 TxRxResponse 对象绑定到 response 变量
+            // 解构内部结构：同时解构 TxRxResponse 结构体，提取出 working_counter 和 extra 字段
             let response @ TxRxResponse {
                 working_counter: _wkc,
                 // 从tx_rx_dc函数获取时间同步信息

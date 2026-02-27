@@ -57,6 +57,11 @@ pub struct SubDevice {
 
     pub(crate) alias_address: u16,
 
+    // （init to PreOp）configure_mailbox_sms() 配置邮箱
+    // TODO 要切换到Pre Op，必须要先配置邮箱，因此可以在new函数中读取邮箱配置
+    // （PreOp to SafeOp）configure_fmmus() 配置IO（FMMU）
+    // EEPROM方案中IO配置需要等用户确定PDO配置，才能保存到这里。用户配置PDO时，就可以知道IO配置，不需要保存到这里
+    // ENI方案中，在初始化时就能读取到IO配置。
     pub(crate) config: SubDeviceConfig,
 
     pub(crate) identity: SubDeviceIdentity,
@@ -148,6 +153,7 @@ impl SubDevice {
     /// This method reads the SubDevices's name and other identifying information, but does not
     /// configure it.
     // 确认从站在init状态；从EEPROM读取从站名称和标识信息；从寄存器读取ESC支持功能，地址别名，端口，创建从站
+    // config: SubDeviceConfig 只设置为默认值，没有从从站寄存器读取配置信息
     pub(crate) async fn new<'sto>(
         maindevice: &'sto MainDevice<'sto>,
         index: u16,
@@ -464,7 +470,9 @@ impl SubDevice {
 #[derive(Debug)]
 #[doc(alias = "SlaveRef")] // 提供文档别名，便于搜索
 pub struct SubDeviceRef<'maindevice, S> {
-    pub(crate) maindevice: &'maindevice MainDevice<'maindevice>, // 对主设备(MainDevice)的不可变引用
+    // 对主设备(MainDevice)的不可变引用
+    // TODO 需要主站引用的原因是主站中保存了帧收发循环的引用，超时设置，重发次数。其实可以分割出来
+    pub(crate) maindevice: &'maindevice MainDevice<'maindevice>,
     pub(crate) configured_address: u16,
     state: S, // 从站设备的状态数据，类型为泛型参数 S，类型由传入的参数自动推断
 }
@@ -1277,7 +1285,7 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
         maindevice: &'maindevice MainDevice<'maindevice>,
         configured_address: u16,
         state: S, // S 的类型由传入的 state 参数自动推断
-                  // 可能类型为 SubDevice，()
+                  // 可能类型为 SubDevice，()，SubDevicePdi
     ) -> Self {
         Self {
             maindevice,

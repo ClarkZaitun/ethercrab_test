@@ -270,6 +270,8 @@ impl<'sto> MainDevice<'sto> {
         // pretty much anything.
         self.num_subdevices.store(num_subdevices, Ordering::Relaxed);
 
+        // 为了实现从站的不可变引用：在主站中申请从站类型的双端队列内存，然后在主站中先设置从站的配置地址，再创建从站，放到双端队列中
+
         // 使用heapless库提供的双端队列实现
         // 创建了一个固定容量的双端队列(deque)来存储从站设备(SubDevice)实例
         let mut subdevices = heapless::Deque::<SubDevice, MAX_SUBDEVICES>::new();
@@ -302,6 +304,7 @@ impl<'sto> MainDevice<'sto> {
             let configured_address = BASE_SUBDEVICE_ADDRESS.wrapping_add(subdevice_idx);
 
             // 确认从站在init状态；从EEPROM读取从站名称和标识信息；从寄存器读取ESC支持功能，地址别名，端口，创建从站
+            // 注意：config: SubDeviceConfig 只设置为默认值，没有从从站寄存器读取配置信息
             let subdevice = SubDevice::new(self, subdevice_idx, configured_address).await?;
 
             subdevices
@@ -364,7 +367,7 @@ impl<'sto> MainDevice<'sto> {
                 // 将 SubDeviceGroup 转换为 SubDeviceGroupRef 类型，同时擦除其常量泛型参数
                 // 初始化组内的所有从设备（SubDevice），并将它们置于 PRE-OP状态，同时配置组内从设备在过程数据映像（PDI）中的映射。
                 // 这里会修改pdi_position的start_address
-                // 通过EEOROM数据配置邮箱，切换到PreOp，读取对象字典中的0x1c00同步管理器类型，保存邮箱配置
+                // 通过EEOROM数据配置邮箱，切换到PreOp，读取对象字典中的0x1c00同步管理器类型，保存从站配置中的邮箱配置
                 offset = group.as_ref().into_pre_op(offset, self).await?;
 
                 fmt::debug!("After group ID {} offset: {:?}", id, offset);

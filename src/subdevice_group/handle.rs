@@ -67,6 +67,7 @@ where
     }
 }
 
+// 保存组的从站数组和PDI起始偏移量的可变引用
 #[derive(Debug)]
 struct GroupInnerRef<'a> {
     // 指向 SubDevice 切片的可变引用，生命周期为 'a。
@@ -83,8 +84,10 @@ struct GroupInnerRef<'a> {
 /// [`MainDevice::init`](crate::MainDevice::init).
 #[doc(alias = "SlaveGroupRef")]
 pub struct SubDeviceGroupRef<'a> {
+    // 将当前组的最大 PDI 长度赋值给 max_pdi_len 字段，就是 ek1100.rs 中定义的 PDI_LEN
     /// Maximum PDI length in bytes.
     max_pdi_len: usize,
+    // 保存组的从站数组和PDI起始偏移量的可变引用
     inner: GroupInnerRef<'a>,
 }
 

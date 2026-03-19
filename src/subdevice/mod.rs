@@ -98,6 +98,8 @@ pub struct SubDevice {
     /// The 1-7 cyclic counter used when working with mailbox requests.
     pub(crate) mailbox_counter: AtomicU8,
 
+    // 初始化时设置为 0
+    // TODO EEPROM中保存了 DC 配置，需要在初始化时读取
     /// DC config.
     pub(crate) dc_sync: DcSync,
 }
@@ -1453,7 +1455,7 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
     pub(crate) async fn set_eeprom_mode(&self, mode: SiiOwner) -> Result<(), Error> {
         // ETG1000.4 Table 48 – SubDevice information interface access
         // A value of 2 sets owner to Master (not PDI) and cancels access
-        // FPWR 0x0500 数据2
+        // FPWR 0x0500 数据2。间接设置 0x0501[0] 为 0
         // Reset Bit 0x0501[0] to 0: PDI releases EEPROM access
         self.write(RegisterAddress::SiiConfig)
             .send(self.maindevice, 2u16)

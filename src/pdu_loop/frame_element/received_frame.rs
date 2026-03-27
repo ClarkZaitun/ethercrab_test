@@ -197,6 +197,7 @@ impl<'sto> Iterator for ReceivedPduIter<'sto> {
             return None;
         }
 
+        // 获取一个不可变的字节切片，该切片是整个以太网帧中可用于EtherCAT数据报的区域中 buf_pos 之后的字节切片
         let buf = self.frame.inner.pdu_buf().get(self.buf_pos..)?;
 
         let pdu_header = match PduHeader::unpack_from_slice(buf) {
@@ -204,19 +205,26 @@ impl<'sto> Iterator for ReceivedPduIter<'sto> {
             Err(e) => return Some(Err(e.into())),
         };
 
+        // 数据报的数据区长度
         let payload_len = usize::from(pdu_header.flags.len());
+        // 当前数据报的总长度
         let this_pdu_len = PduHeader::PACKED_LEN + payload_len + 2;
 
-        // If buffer isn't long enough to hold payload and WKC, this is probably a corrupt PDU or
-        // someone is committing epic haxx.
+        // 检查当前字节切片缓冲区是否足够长，能够容纳 PDU  payload 和工作计数器 (WKC)
+        // 如果缓冲区长度不足，可能是 PDU 损坏或数据异常
+        // TODO 这里的检查应该是错误的，需要同时检查 PduHeader::PACKED_LEN + payload_len + 2 才对吧
         if buf.len() < payload_len + 2 {
             return Some(Err(Error::Pdu(PduError::TooLong)));
         }
 
+        // 获取 PDU  payload 数据的指针
+        // 跳过 PDU 头部，指向 payload 数据开始位置
         let payload_ptr = unsafe {
             NonNull::new_unchecked(buf.get(PduHeader::PACKED_LEN..)?.as_ptr().cast_mut())
         };
 
+        // 解析工作计数器 (WKC)
+        // WKC 位于 payload 数据之后，占用 2 个字节
         let working_counter = match buf
             .get((PduHeader::PACKED_LEN + payload_len)..)
             .ok_or(Error::Internal)
@@ -226,24 +234,25 @@ impl<'sto> Iterator for ReceivedPduIter<'sto> {
             Err(e) => return Some(Err(e)),
         };
 
+        // 创建 ReceivedPdu 实例，包含解析出的 PDU 信息
         let res = Ok(ReceivedPdu {
-            data_start: payload_ptr,
-            len: payload_len,
-            working_counter,
-            _storage: PhantomData,
+            data_start: payload_ptr, // payload 数据起始指针
+            len: payload_len,        // payload 长度
+            working_counter,         // 工作计数器值
+            _storage: PhantomData,   // 类型标记
         });
 
         // 更新下一个数据报的起始位置
-        // Update buffer pos for next iteration if there are more PDUs to come
+        // 如果当前 PDU 不是帧中的最后一个，则移动到下一个 PDU 的起始位置
         if pdu_header.flags.more_follows {
             self.buf_pos += this_pdu_len;
         }
-        // No more frames, so quit the next time round by trying to read way off the end of the
-        // buffer.
+        // 如果是最后一个 PDU，则将 buf_pos 设置为最大值，以便在下一次迭代中退出
         else {
             self.buf_pos = usize::MAX
         }
 
+        // 返回解析结果
         Some(res)
     }
 }
@@ -304,6 +313,7 @@ impl Deref for ReceivedPdu<'_> {
 
     // Temporally shorter borrow: This ref is the lifetime of SimpleReceivedPdu, not 'sto. This is
     // the magic.
+    // 返回指向数据报数据的字节切片引用
     fn deref(&self) -> &Self::Target {
         let len = self.len();
 

@@ -1,6 +1,7 @@
 use crate::subdevice_state::SubDeviceState;
 
-// 0x130状态寄存器，2字节
+// 0x120状态控制寄存器，2字节
+// 作者实际上还复用为0x130状态寄存器，2字节
 /// The AL control/status word for an individual SubDevice.
 ///
 /// Defined in ETG1000.6 Table 9 - AL Control Description.

@@ -1456,6 +1456,7 @@ impl<'maindevice, S> SubDeviceRef<'maindevice, S> {
         // ETG1000.4 Table 48 – SubDevice information interface access
         // A value of 2 sets owner to Master (not PDI) and cancels access
         // FPWR 0x0500 数据2。间接设置 0x0501[0] 为 0
+        // 释放 PDI 对EEPROM的访问权限
         // Reset Bit 0x0501[0] to 0: PDI releases EEPROM access
         self.write(RegisterAddress::SiiConfig)
             .send(self.maindevice, 2u16)

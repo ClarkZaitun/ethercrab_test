@@ -807,6 +807,7 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, S, DC>
                     break Ok(());
                 }
 
+                // 等待一段时间，进入下一次循环
                 maindevice.timeouts.loop_tick().await;
             }
         }

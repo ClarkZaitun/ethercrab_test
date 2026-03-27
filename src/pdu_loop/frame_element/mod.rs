@@ -203,7 +203,11 @@ impl<const N: usize> FrameElement<N> {
             })?;
 
         unsafe {
+            // 将当前帧的 storage_slot_index 字段设置为 frame_index，
+            // 表示该帧现在被分配到了 storage 缓冲区中的第 frame_index 个槽位
             (*addr_of_mut!((*this.as_ptr()).storage_slot_index)) = frame_index;
+            // 将当前帧的 pdu_payload_len 字段设置为 0，
+            // 表示该帧当前不包含任何 PDU 数据
             (*addr_of_mut!((*this.as_ptr()).pdu_payload_len)) = 0;
         }
 

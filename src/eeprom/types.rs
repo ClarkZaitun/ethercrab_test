@@ -350,12 +350,16 @@ impl EtherCrabWireRead for PortStatuses {
 #[wire(bytes = 18)]
 pub struct SiiGeneral {
     #[wire(bytes = 1)]
+    // Group Information (Vendor specific) - Index to STRINGS [Esi:DeviceType:GroupType]
     pub(crate) group_string_idx: u8,
     #[wire(bytes = 1)]
     pub(crate) image_string_idx: u8,
     #[wire(bytes = 1)]
+    // Device Order Number (Vendor specific) - Index to STRINGS [Esi:DeviceType:Type]
+    // 这就是从站名字？
     pub(crate) order_string_idx: u8,
     #[wire(bytes = 1, post_skip_bytes = 1)]
+    // Device Name Information (Vendor specific) - Index to STRINGS [Esi:DeviceType:Name]
     pub name_string_idx: u8,
     // reserved: u8,
     #[wire(bytes = 1)]

@@ -37,11 +37,10 @@ struct TxRxFut<'a> {
 //实现Future trait
 impl<'a> Future for TxRxFut<'a> {
     //type Output 是 Future trait 里的关联类型，用于指定 TxRxFut 这个 Future 完成时产生的值的类型
-    //意味着所有以这个trait 为返回值的函数，都必须返回一个Result类型？
     type Output = Result<(PduTx<'a>, PduRx<'a>), Error>;
 
     //尝试发送和接收 EtherCAT 数据，若操作完成就返回 Poll::Ready，若操作未完成则返回 Poll::Pending
-    //发送多个，只接收一个？
+    // poll_read 返回 Poll::Pending 时，会注册当前 waker。当 socket 有数据到达时，epoll 触发， async_io 调用 waker.wake() 唤醒 executor
     fn poll(mut self: Pin<&mut Self>, ctx: &mut core::task::Context<'_>) -> Poll<Self::Output> {
         // 更新唤醒器waker
         unsafe {

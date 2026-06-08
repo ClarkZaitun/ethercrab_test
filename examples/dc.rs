@@ -116,10 +116,10 @@ fn main() -> Result<(), Error> {
         for mut subdevice in group.iter_mut(&maindevice) {
             if subdevice.name() == "LAN9252-EVB-HBI" {
                 // Sync mode 02 = SYNC0
-                // 设置同步模式为 SYNC0: 按SSC的描述，此处的设置应该是错误的。应该是由DC寄存器自动设置
-                // StartInputHandler() 中会根据 0x981寄存器值，综合 nPdOutputSize、nPdInputSize 设置 同步模式
+                // 设置同步模式为 SYNC0: 按SSC的描述，允许主站直接设置这个值
                 // 实际的同步模式，可以从主站写入以在 ECAT FreeRun 和 ECAT Synchron 模式之间切换（如果从站支持这两种模式），
                 // 在 DC 模式下（由 DC 寄存器选择）此值将被 SYNCTYPE_DCSYNC0 或 SYNCTYPE_DCSYNC1 覆盖
+                // StartInputHandler() 中会根据 0x981寄存器值，综合 nPdOutputSize、nPdInputSize 设置同步模式
                 // 默认模式为 ECAT Synchron 模式
                 subdevice
                     .sdo_write(0x1c32, 1, 2u16)

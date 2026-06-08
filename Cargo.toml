@@ -95,6 +95,11 @@ smoltcp = { version = "0.12.0", default-features = false, features = [
     "socket-raw",
 ] }
 
+# 这里和前面的依赖中的 optional = true 保持一致。可选就是默认不选。需要编译时通过--features启用。
+# 但这里定义了 default 特性，所以默认启用 std 特性。
+# 而 std 特性中包含了 defmt、log、std 等特性，所以默认启用 defmt、log、std 等特性。
+# 这样一来， defmt、log 等特性就会在编译时自动启用，而不需要在编译时通过 --features 显式启用。
+# 这样做是为了方便嵌入式系统应用在 no_std 环境下使用。
 [features] # 特性配置区域的声明，用于定义项目的条件编译特性
 default = ["std"] # 默认启用 std 特性
 defmt = [ # 集成 defmt 轻量级日志框架（常用于嵌入式系统），需配合 defmt 工具链使用

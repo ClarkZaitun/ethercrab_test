@@ -606,6 +606,7 @@ where
         // Ensure SubDevice OUT (master IN) mailbox is empty. We'll retry this multiple times in
         // case the SubDevice is still busy or bugged or something.
         // 查询是否有OUT邮箱数据
+        // TODO 如果有数据，重试10次数据还没准备好，返回错误
         for i in 0..10 {
             // 读取邮箱对应的SM的状态寄存器
             let sm_status = self
@@ -614,6 +615,7 @@ where
                 .await?;
 
             // If flag is set, read entire mailbox to clear it
+            // 如果邮箱满，说明从站有数据准备发送，需要读取邮箱数据，清空邮箱。
             if sm_status.mailbox_full {
                 fmt::debug!(
                     "SubDevice {:#06x} OUT mailbox not empty (status {:?}). Clearing.",
@@ -621,7 +623,8 @@ where
                     sm_status
                 );
 
-                // 从站的邮箱数据准备完成，读取OUT邮箱数据，清空邮箱
+                // 从站的邮箱数据准备完成，读取OUT邮箱数据，清空邮箱。
+                // TODO 返回值需要处理，按照这个架构设计应该是紧急事件，或者abort
                 self.read(read_mailbox.address)
                     .ignore_wkc()
                     .receive_slice(self.maindevice, read_mailbox.len)
@@ -632,6 +635,8 @@ where
 
             // Don't delay on first iteration
             if i > 0 {
+                // TODO 这里使用 loop_tick 不合适，因为邮箱数据通常比较慢，但循环查询一般需要比较快。
+                // TODO 应该使用 mailbox_response
                 self.maindevice.timeouts.loop_tick().await;
             }
 
@@ -643,7 +648,7 @@ where
         // Wait for SubDevice IN mailbox to be available to receive data from master
         async {
             loop {
-                // 等待从站的IN邮箱准备好，准备接收数据
+                // 等待从站的IN邮箱准备好，准备接收主站数据
                 let sm_status = self
                     .read(mailbox_write_sm_status)
                     .receive::<crate::sync_manager_channel::Status>(self.maindevice)
@@ -787,6 +792,8 @@ where
                 extra_data: [u8; 5],
             }
 
+            // 跳过数据的前12个字节
+            // TODO 正确是跳过（邮箱头和coe命令），共 6+2=8字节
             response.trim_front(HeadersRaw::PACKED_LEN);
 
             // 再次反序列化邮箱响应数据，提取紧急事件信息
@@ -852,6 +859,7 @@ where
         } else {
             let headers = R::unpack_from_slice(&response)?;
 
+            // 跳过非数据区部分，只保留数据区部分
             response.trim_front(HeadersRaw::PACKED_LEN);
 
             Ok((headers, response))
